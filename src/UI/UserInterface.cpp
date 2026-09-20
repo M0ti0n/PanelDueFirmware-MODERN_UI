@@ -245,6 +245,8 @@ static String<12> controlToolActiveText[ControlToolVisibleColumns];
 static String<12> controlToolStandbyText[ControlToolVisibleColumns];
 static ModernIconButton *controlToolPageUpButton = nullptr;
 static ModernIconButton *controlToolPageDownButton = nullptr;
+static constexpr uint32_t ControlToolsTemperatureRefreshInterval = 2000;
+static uint32_t controlToolsLastTemperatureRefresh = 0;
 
 enum class NumericPopupContext : uint8_t
 {
@@ -503,7 +505,7 @@ static bool statusJobCanScrollEarlier = false;
 static bool statusJobCanScrollLater = false;
 static bool statusJobInSubdir = false;
 
-// STATUS > JOB STATUS. The nine cards are intentionally read-only; tuning belongs on STATUS > TUNE.
+// STATUS > PRINTING. The nine cards are intentionally read-only; tuning belongs on STATUS > TUNE.
 enum class JobStatusTileType : uint8_t
 {
 	ToolTemp, BedTemp, ChamberTemp, FanPart, FanAux, FanCha, SpeedReq, SpeedCur, FlowFactor, FlowVol
@@ -773,6 +775,16 @@ static ModernTextButton *AddTopTab(unsigned int index, unsigned int count, const
 		label, event, 0, DEFAULT_FONT, false);
 	mgr.AddField(tab);
 	return tab;
+}
+
+// Fill the complete top-tab strip behind the rounded tab buttons. Add this
+// after the tabs because DisplayFieldManager::AddField() prepends: the strip
+// then renders first and prevents the page background showing through at the
+// rounded tab corners.
+static void AddTopTabBackground()
+{
+	const Colour tile = UTFT::fromRGB(28, 34, 43);            // #1c222b
+	mgr.AddField(new ModernCard(0, topTabRowLeft, topTabRowWidth, topTabHeight, tile, tile, false));
 }
 
 static ButtonBase * null currentTab = nullptr;
@@ -2319,17 +2331,17 @@ static void CreateCommonFields(const ColourScheme& colours)
 	DisplayField::SetDefaultColours(colours.buttonTextColour, colours.buttonTextBackColour, colours.buttonBorderColour, colours.buttonGradColour,
 									colours.buttonPressedBackColour, colours.buttonPressedGradColour, colours.pal);
 	const Colour pageBg = UTFT::fromRGB(18, 22, 28);      // #12161c
-	const Colour tile = UTFT::fromRGB(28, 34, 43);        // #1c222b
-	const Colour text = UTFT::fromRGB(229, 232, 236);     // #e5e8ec
-	const Colour accent = GetModernAccentColour();     // #e2453f
+	const Colour railBg = UTFT::fromRGB(42, 50, 64);       // #2a3240, permanent left rail fill
+	const Colour tile = UTFT::fromRGB(28, 34, 43);         // #1c222b
+	const Colour text = UTFT::fromRGB(229, 232, 236);      // #e5e8ec
+	const Colour accent = GetModernAccentColour();
 
 	DisplayField::SetDefaultColours(text, tile, accent, tile, accent, accent, IconPaletteDark);
 #if DISPLAY_X == 800
-	// Exact rail geometry: STOP 76x68 at (7,5); CONTROL/STATUS/SYSTEM/ALERT
-	// all 76x76, each 20px below the previous one's bottom edge (33px below
-	// STOP specifically, matching the mock-up).
+	// Permanent left rail. STOP, CONTROL, STATUS, SYSTEM and the CONSOLE
+	// warning shortcut all share the same x-position and 76x76 footprint.
 	ModernStopButton * const stopButton = new ModernStopButton(
-		5, 7, 76, 68, evEmergencyStop, DEFAULT_FONT);
+		5, 7, 76, 76, evEmergencyStop, DEFAULT_FONT);
 	ModernAlertNavButton * const alertButton = new ModernAlertNavButton(
 		394, 7, 76, 76, evSystemConsole);
 	tabControl = new ModernMasterNavButton(106, 7, 76, 76, MasterNavIcon::Joystick, evTabControl);
@@ -2340,7 +2352,9 @@ static void CreateCommonFields(const ColourScheme& colours)
 	mgr.AddField(tabStatus);
 	mgr.AddField(tabSystem);
 	mgr.AddField(alertButton);
-	mgr.AddField(new ModernCard(0, 0, masterTabWidth, DisplayY, pageBg, pageBg, false));
+	// Add the rail background last because AddField() prepends. It therefore
+	// paints first, with STOP/master-nav/console controls rendered on top.
+	mgr.AddField(new ModernCard(0, 0, masterTabWidth, DisplayY, railBg, railBg, false));
 	// Thin Accent-coloured separator directly under the top tab row. Shared
 	// here on baseRoot so every page (CONTROL/STATUS/SYSTEM subtabs) inherits
 	// it without needing to add it three times.
@@ -2367,16 +2381,18 @@ static void AddControlSubTabs()
 	AddTopTab(1, 4, "MOVE", evControlMovement);
 	AddTopTab(2, 4, "EXTRUDE", evControlExtrusion);
 	AddTopTab(3, 4, "MACROS", evControlMacros);
+	AddTopTabBackground();
 	controlRoot = mgr.GetRoot();
 }
 
 static void AddStatusSubTabs(DisplayField *&root)
 {
 	mgr.SetRoot(root);
-	AddTopTab(0, 4, "JOB STATUS", evStatusJobStatus);
+	AddTopTab(0, 4, "PRINTING", evStatusJobStatus);
 	AddTopTab(1, 4, "TUNE", evStatusTune);
 	AddTopTab(2, 4, "JOB", evStatusJob);
 	AddTopTab(3, 4, "OBJECT", evStatusObjects);
+	AddTopTabBackground();
 	root = mgr.GetRoot();
 }
 
@@ -2385,6 +2401,7 @@ static void AddSystemSubTabs(DisplayField *&root)
 	mgr.SetRoot(root);
 	AddTopTab(0, 2, "CONSOLE", evSystemConsole);
 	AddTopTab(1, 2, "SETTINGS", evSystemSettings);
+	AddTopTabBackground();
 	root = mgr.GetRoot();
 }
 
@@ -2606,6 +2623,52 @@ static void RefreshControlToolsPage()
 	const bool paged = resourceCount > ControlToolVisibleColumns;
 	mgr.Show(controlToolPageUpButton, paged && controlToolPage > 0);
 	mgr.Show(controlToolPageDownButton, paged && controlToolPage < maxPage);
+}
+
+// Current heater temperatures arrive frequently from RRF. Do not rebuild the
+// complete TOOLS page for every temperature sample; update only the visible
+// temperature field that belongs to this heater. Full page refreshes are still
+// used for structural/state changes such as page selection, tool status and
+// heater status changes.
+static void RefreshControlToolCurrentTemperature(size_t heaterIndex)
+{
+	if (heaterIndex >= JobStatusMaxHeaters)
+	{
+		return;
+	}
+
+	for (unsigned int column = 0; column < ControlToolVisibleColumns; ++column)
+	{
+		const ControlToolResource& resource = controlToolVisibleResource[column];
+		if (resource.type == ControlToolResourceType::None ||
+			resource.heater != static_cast<int>(heaterIndex) ||
+			controlToolCurrentFields[column] == nullptr)
+		{
+			continue;
+		}
+
+		if (jobStatusHeaterValid[heaterIndex])
+		{
+			controlToolCurrentText[column].printf("%.1f" DEGREE_SYMBOL "C", (double)jobStatusHeaterTemps[heaterIndex]);
+		}
+		else
+		{
+			controlToolCurrentText[column].copy("---" DEGREE_SYMBOL "C");
+		}
+		controlToolCurrentFields[column]->SetValue(controlToolCurrentText[column].c_str());
+	}
+}
+
+static void RefreshControlToolCurrentTemperatures()
+{
+	for (unsigned int column = 0; column < ControlToolVisibleColumns; ++column)
+	{
+		const ControlToolResource& resource = controlToolVisibleResource[column];
+		if (resource.type != ControlToolResourceType::None && resource.heater >= 0)
+		{
+			RefreshControlToolCurrentTemperature(static_cast<size_t>(resource.heater));
+		}
+	}
 }
 
 static void ConfigureNumericPopupForTemperature()
@@ -4169,19 +4232,33 @@ static const char *JobStatusTileLabel(JobStatusTileType type, String<20>& label)
 	switch (type)
 	{
 	case JobStatusTileType::ToolTemp:
-		label.printf((currentTool >= 0) ? "T%d" : "TOOL TEMP", currentTool);
+		if (currentTool >= 0)
+		{
+			label.printf("TOOL T%d", currentTool);
+		}
+		else
+		{
+			label.copy("TOOL T#");
+		}
 		break;
 	case JobStatusTileType::BedTemp: label.copy("BED"); break;
 	case JobStatusTileType::ChamberTemp: label.copy("CHAMBER"); break;
 	case JobStatusTileType::FanPart:
-		label.printf((currentTool >= 0) ? "FAN T%d" : "FAN PART", currentTool);
+		if (currentTool >= 0)
+		{
+			label.printf("FAN T%d", currentTool);
+		}
+		else
+		{
+			label.copy("FAN T#");
+		}
 		break;
 	case JobStatusTileType::FanAux: label.copy("FAN AUX"); break;
 	case JobStatusTileType::FanCha: label.copy("FAN ->I->"); break;
 	case JobStatusTileType::SpeedReq: label.copy("SPEED REQ:"); break;
-	case JobStatusTileType::SpeedCur: label.copy("SPEED CU:"); break;
-	case JobStatusTileType::FlowFactor: label.copy("FLOW FAC:"); break;
-	case JobStatusTileType::FlowVol: label.copy("FLOW VOL:"); break;
+	case JobStatusTileType::SpeedCur: label.copy("SPEED"); break;
+	case JobStatusTileType::FlowFactor: label.copy("FLOW"); break;
+	case JobStatusTileType::FlowVol: label.copy("VOL. FLOW"); break;
 	}
 	return label.c_str();
 }
@@ -4332,17 +4409,43 @@ static void RefreshJobStatusHeader()
 
 static void RefreshJobStatusActions()
 {
-	if (jobStatusPauseResumeButton == nullptr)
+	if (jobStatusPauseResumeButton == nullptr || jobStatusAbortButton == nullptr)
 	{
 		return;
 	}
+
 	const OM::PrinterStatus stat = GetStatus();
 	const bool paused = (stat == OM::PrinterStatus::paused || stat == OM::PrinterStatus::resuming);
-	jobStatusPauseResumeButton->SetText(paused ? "> RESUME" : "|| PAUSE");
 	const bool canPauseResume = (stat == OM::PrinterStatus::printing || stat == OM::PrinterStatus::paused ||
 		stat == OM::PrinterStatus::pausing || stat == OM::PrinterStatus::resuming);
+	const bool canAbort = canPauseResume || stat == OM::PrinterStatus::simulating;
+
+	jobStatusPauseResumeButton->SetText(paused ? "> RESUME" : "|| PAUSE");
+
+	// Hidden PRINTING actions must also be non-interactive.  Clearing the event
+	// prevents an invisible button from ever being selected by the touch hit-test,
+	// and clearing Press() prevents a stale outline/fill when it is shown again.
+	if (canPauseResume)
+	{
+		jobStatusPauseResumeButton->SetEvent(evStatusJobStatusPauseResume, 0);
+	}
+	else
+	{
+		jobStatusPauseResumeButton->Press(false, 0);
+		jobStatusPauseResumeButton->SetEvent(nullEvent, 0);
+	}
 	mgr.Show(jobStatusPauseResumeButton, canPauseResume);
-	mgr.Show(jobStatusAbortButton, canPauseResume || stat == OM::PrinterStatus::simulating);
+
+	if (canAbort)
+	{
+		jobStatusAbortButton->SetEvent(evStatusJobStatusAbort, 0);
+	}
+	else
+	{
+		jobStatusAbortButton->Press(false, 0);
+		jobStatusAbortButton->SetEvent(nullEvent, 0);
+	}
+	mgr.Show(jobStatusAbortButton, canAbort);
 }
 
 static void JobStatusThumbnailRefreshNotify(bool full, bool changed)
@@ -4540,8 +4643,8 @@ static void CreateStatusJobTabFields(const ColourScheme& colours)
 	}
 
 	// Optional storage-volume selector. It occupies the first-row slot in the
-	// same right-hand column as the page arrows and is only shown when RRF
-	// reports more than one accessible volume, matching the legacy file browser.
+	// same right-hand column as the page arrows and is shown only when RRF
+	// reports more than one *mounted* volume. Empty/unmounted card slots stay hidden.
 	DisplayField::SetDefaultColours(accent, tile);
 	statusJobSdButton = new ModernTextButton(85, JobX(736), JobW(54), 56, "SD", evChangeCard, 0, glcd19x21, true);
 	statusJobSdButton->SetBorderColour(accent);
@@ -4837,6 +4940,32 @@ static void RefreshTuneToolRows()
 	RefreshTuneGeneralFans();
 }
 
+static void RefreshTunePage()
+{
+	if (tuneSpeedButton != nullptr)
+	{
+		tuneSpeedText.printf("%d%%", tuneSpeedPercent);
+		tuneSpeedButton->SetText(tuneSpeedText.c_str());
+	}
+
+	// Z offset is cached in the object model. Only paint it when TUNE itself
+	// is deliberately refreshed (tab entry, page change, or local action).
+	OM::IterateAxesWhile([](OM::Axis*& axis, size_t) {
+		if (axis != nullptr && axis->letter[0] == 'Z')
+		{
+			tuneZOffsetText.printf("%.3f", (double)axis->babystep);
+			if (tuneZOffsetButton != nullptr)
+			{
+				tuneZOffsetButton->SetText(tuneZOffsetText.c_str());
+			}
+			return false;
+		}
+		return true;
+	});
+
+	RefreshTuneToolRows();
+}
+
 static void CreateStatusTuneTabFields(const ColourScheme& colours)
 {
 	mgr.SetRoot(baseRoot);
@@ -4916,7 +5045,7 @@ static void CreateStatusTuneTabFields(const ColourScheme& colours)
 	mgr.AddField(new ModernTextButton(0, masterTabWidth, DisplayX - masterTabWidth, DisplayY, nullptr, evNull, 0, glcd19x21));
 	statusTuneRoot = mgr.GetRoot();
 	DisplayField::SetDefaultFont(DEFAULT_FONT);
-	RefreshTuneToolRows();
+	RefreshTunePage();
 }
 #endif
 
@@ -4988,8 +5117,10 @@ static void CreateModernStandardPopup()
 	DisplayField::SetDefaultColours(text, tile);
 	standardPopupNameCard = new ModernCard(35, 205, 250, 60, tile, accent, false);
 	standardPopupNameField = new StaticTextField(55, 205, 250, TextAlignment::Centre, "");
-	standardPopup->AddField(standardPopupNameCard);
+	// Add text first and card second because AddField() prepends fields.
+	// The card will therefore render first and the text will render on top.
 	standardPopup->AddField(standardPopupNameField);
+	standardPopup->AddField(standardPopupNameCard);
 
 	// Reusable 550x150 information tile. It is hidden for choice popups and
 	// shown only by confirmation/information contexts. Three text rows cover
@@ -4997,7 +5128,6 @@ static void CreateModernStandardPopup()
 	DisplayField::SetDefaultColours(text, tile);
 	standardPopupInfoCard = new ModernCard(139, 55, 550, 150, tile, UTFT::fromRGB(59, 67, 79), true);
 	standardPopupInfoCard->Show(false);
-	standardPopup->AddField(standardPopupInfoCard);
 	DisplayField::SetDefaultFont(glcd19x21);
 	for (size_t i = 0; i < ARRAY_SIZE(standardPopupInfoFields); ++i)
 	{
@@ -5005,6 +5135,9 @@ static void CreateModernStandardPopup()
 		standardPopupInfoFields[i]->Show(false);
 		standardPopup->AddField(standardPopupInfoFields[i]);
 	}
+	// Add the card after the text fields so it is prepended ahead of them
+	// and therefore renders first, leaving the text visible on top.
+	standardPopup->AddField(standardPopupInfoCard);
 
 	// Reusable middle-area button pool. Only the buttons required by the current
 	// popup context are shown. Sixteen covers 10 RRF M291 axis selectors plus 6 jog buttons;
@@ -5699,10 +5832,6 @@ namespace UI
 		{
 			jobStatusHeaterTemps[heaterIndex] = fval;
 			jobStatusHeaterValid[heaterIndex] = true;
-			if (currentUiPage == UiPage::ControlTools)
-			{
-				RefreshControlToolsPage();
-			}
 			if (currentUiPage == UiPage::ControlExtrusion)
 			{
 				RefreshControlExtrudeTools();
@@ -5734,8 +5863,9 @@ namespace UI
 #if DISPLAY_X == 800
 		if (heaterIndex < JobStatusMaxHeaters)
 		{
+			const bool statusChanged = (jobStatusHeaterStatus[heaterIndex] != status);
 			jobStatusHeaterStatus[heaterIndex] = status;
-			if (currentUiPage == UiPage::ControlTools)
+			if (statusChanged && currentUiPage == UiPage::ControlTools)
 			{
 				RefreshControlToolsPage();
 			}
@@ -5801,10 +5931,6 @@ namespace UI
 		}
 		currentTool = ival;
 #if DISPLAY_X == 800
-		if (tuneToolNumberButtons[0] != nullptr)
-		{
-			RefreshTuneToolRows();
-		}
 		if (jobStatusLabels[0] != nullptr)
 		{
 			RefreshJobStatusTiles();
@@ -6041,6 +6167,7 @@ namespace UI
 			mgr.SetRoot(controlToolsRoot);
 			currentUiPage = UiPage::ControlTools;
 			RefreshControlToolsPage();
+			controlToolsLastTemperatureRefresh = SystemTick::GetTickCount();
 #else
 			mgr.SetRoot(controlRoot);
 #endif
@@ -6214,6 +6341,12 @@ namespace UI
 		}
 #if DISPLAY_X == 800
 		const uint32_t now = SystemTick::GetTickCount();
+		if (currentUiPage == UiPage::ControlTools && now - controlToolsLastTemperatureRefresh >= ControlToolsTemperatureRefreshInterval)
+		{
+			controlToolsLastTemperatureRefresh = now;
+			RefreshControlToolCurrentTemperatures();
+			mgr.Refresh(false);
+		}
 		if (currentUiPage == UiPage::StatusJobStatus && now - jobStatusLastLiveRefresh >= 1000)
 		{
 			jobStatusLastLiveRefresh = now;
@@ -6384,13 +6517,6 @@ namespace UI
 					{
 						babystepOffsetField->SetValue(axis->babystep);
 					}
-#if DISPLAY_X == 800
-					if (tuneZOffsetButton != nullptr)
-					{
-						tuneZOffsetText.printf("%.3f", (double)axis->babystep);
-						tuneZOffsetButton->SetText(tuneZOffsetText.c_str());
-					}
-#endif
 				}
 				return true;
 			});
@@ -6479,10 +6605,6 @@ namespace UI
 		if (fanIndex < TuneMaxFans)
 		{
 			tuneFanNames[fanIndex].copy((name != nullptr) ? name : "");
-			if (currentUiPage == UiPage::StatusTune)
-			{
-				RefreshTuneGeneralFans();
-			}
 			if (currentUiPage == UiPage::StatusJobStatus)
 			{
 				RefreshJobStatusTilesByType(JobStatusTileType::FanAux);
@@ -6504,10 +6626,6 @@ namespace UI
 			tuneFanNames[fan].Clear();
 		}
 
-		if (tuneToolNumberButtons[0] != nullptr)
-		{
-			RefreshTuneToolRows();
-		}
 		if (currentUiPage == UiPage::StatusJobStatus)
 		{
 			RefreshJobStatusTilesByType(JobStatusTileType::FanPart);
@@ -6524,10 +6642,6 @@ namespace UI
 		{
 			tuneFanPercent[fanIndex] = constrain<int>(rpm, 0, 100);
 			tuneFanValid[fanIndex] = true;
-			if (tuneToolNumberButtons[0] != nullptr)
-			{
-				RefreshTuneToolRows();
-			}
 			if (currentUiPage == UiPage::StatusJobStatus)
 			{
 				RefreshJobStatusTilesByType(JobStatusTileType::FanPart);
@@ -6567,6 +6681,15 @@ namespace UI
 			return;
 		}
 
+#if DISPLAY_X == 800
+		// RRF may report the same target repeatedly. A full TOOLS-page rebuild for
+		// an unchanged target needlessly redraws every tile/icon and causes visible
+		// flashing, so only rebuild when the value actually changes.
+		const bool targetChanged = (toolHeaterIndex == 0) &&
+			(tool->heaters[0] == nullptr ||
+			 (active ? tool->heaters[0]->activeTemp : tool->heaters[0]->standbyTemp) != temp);
+#endif
+
 		tool->UpdateTemp(toolHeaterIndex, temp, active);
 		if (toolHeaterIndex == 0 || nvData.GetHeaterCombineType() == HeaterCombineType::notCombined)
 		{
@@ -6576,7 +6699,7 @@ namespace UI
 			}
 		}
 #if DISPLAY_X == 800
-		if (toolHeaterIndex == 0 && currentUiPage == UiPage::ControlTools)
+		if (targetChanged && currentUiPage == UiPage::ControlTools)
 		{
 			RefreshControlToolsPage();
 		}
@@ -6605,8 +6728,9 @@ namespace UI
 #if DISPLAY_X == 800
 		if (index < ControlToolMaxHeaters)
 		{
+			const bool targetChanged = (controlToolActiveTarget[index] != ival);
 			controlToolActiveTarget[index] = ival;
-			if (currentUiPage == UiPage::ControlTools) RefreshControlToolsPage();
+			if (targetChanged && currentUiPage == UiPage::ControlTools) RefreshControlToolsPage();
 		}
 #endif
 		UpdateTemperature(index, ival, activeTemps);
@@ -6618,8 +6742,9 @@ namespace UI
 #if DISPLAY_X == 800
 		if (index < ControlToolMaxHeaters)
 		{
+			const bool targetChanged = (controlToolStandbyTarget[index] != ival);
 			controlToolStandbyTarget[index] = ival;
-			if (currentUiPage == UiPage::ControlTools) RefreshControlToolsPage();
+			if (targetChanged && currentUiPage == UiPage::ControlTools) RefreshControlToolsPage();
 		}
 #endif
 		UpdateTemperature(index, ival, standbyTemps);
@@ -6649,10 +6774,6 @@ namespace UI
 		if (index < TuneMaxExtruders)
 		{
 			tuneExtruderFactor[index] = ival;
-			if (tuneToolNumberButtons[0] != nullptr)
-			{
-				RefreshTuneToolRows();
-			}
 			if (currentUiPage == UiPage::StatusJobStatus)
 			{
 				RefreshJobStatusTilesByType(JobStatusTileType::FlowFactor);
@@ -6673,12 +6794,9 @@ namespace UI
 	{
 		UpdateField(spd, ival);
 #if DISPLAY_X == 800
+		// Cache only. TUNE is intentionally event-driven and repaints on tab
+		// entry/page changes or immediately after a user-confirmed change.
 		tuneSpeedPercent = ival;
-		if (tuneSpeedButton != nullptr)
-		{
-			tuneSpeedText.printf("%d%%", ival);
-			tuneSpeedButton->SetText(tuneSpeedText.c_str());
-		}
 #endif
 	}
 
@@ -6749,10 +6867,6 @@ namespace UI
 		{
 			tunePressureAdvance[index] = value;
 			tunePressureAdvanceValid[index] = true;
-			if (tuneToolNumberButtons[0] != nullptr)
-			{
-				RefreshTuneToolRows();
-			}
 		}
 #else
 		UNUSED(index);
@@ -7256,6 +7370,19 @@ namespace UI
 		}
 	}
 
+#if DISPLAY_X == 800
+	static bool KeepModernButtonHighlighted(ButtonBase *button)
+	{
+		if (button == tabControl || button == tabStatus || button == tabSystem)
+		{
+			return true;
+		}
+		// Modern sub-tabs occupy the fixed y=0 top-tab row. Their pressed state
+		// is the selected-tab indication and must persist after finger-up.
+		return button != nullptr && button->GetMinY() == 0 && button->GetMinX() >= topTabRowLeft;
+	}
+#endif
+
 	// Process a touch event
 	void ProcessTouch(ButtonPress bp)
 	{
@@ -7294,6 +7421,7 @@ namespace UI
 				mgr.SetRoot(controlToolsRoot);
 				currentUiPage = UiPage::ControlTools;
 				RefreshControlToolsPage();
+				controlToolsLastTemperatureRefresh = SystemTick::GetTickCount();
 #else
 				mgr.SetRoot(controlRoot);
 #endif
@@ -7390,6 +7518,8 @@ namespace UI
 			}
 
 			case evControlMacroPageUp:
+				mgr.Press(bp, false);
+				currentButton.Clear();
 				if (controlMacroCanScrollEarlier)
 				{
 					FileManager::ScrollControlMacrosPage(-static_cast<int>(ControlMacroRows));
@@ -7402,6 +7532,8 @@ namespace UI
 				break;
 
 			case evControlMacroPageDown:
+				mgr.Press(bp, false);
+				currentButton.Clear();
 				if (controlMacroCanScrollLater)
 				{
 					FileManager::ScrollControlMacrosPage(static_cast<int>(ControlMacroRows));
@@ -7412,6 +7544,7 @@ namespace UI
 			case evControlToolsPageUp:
 				if (controlToolPage > 0) --controlToolPage;
 				RefreshControlToolsPage();
+				controlToolsLastTemperatureRefresh = SystemTick::GetTickCount();
 				mgr.Refresh(false);
 				currentButton.Clear();
 				break;
@@ -7419,6 +7552,7 @@ namespace UI
 			case evControlToolsPageDown:
 				++controlToolPage;
 				RefreshControlToolsPage();
+				controlToolsLastTemperatureRefresh = SystemTick::GetTickCount();
 				mgr.Refresh(false);
 				currentButton.Clear();
 				break;
@@ -7771,7 +7905,7 @@ namespace UI
 			case evStatusTune:
 #if DISPLAY_X == 800
 				mgr.SetRoot(statusTuneRoot);
-				RefreshTuneToolRows();
+				RefreshTunePage();
 #else
 				mgr.SetRoot(printRoot);
 #endif
@@ -7839,7 +7973,7 @@ namespace UI
 				if (tuneToolPage > 0)
 				{
 					--tuneToolPage;
-					RefreshTuneToolRows();
+					RefreshTunePage();
 					mgr.Refresh(false);
 				}
 				currentButton.Clear();
@@ -7847,18 +7981,36 @@ namespace UI
 
 			case evTunePageDown:
 				++tuneToolPage;
-				RefreshTuneToolRows();
+				RefreshTunePage();
 				mgr.Refresh(false);
 				currentButton.Clear();
 				break;
 
 			case evTuneZPlus:
 				SerialIo::Sendf("M290 Z%s\n", babystepAmounts[nvData.GetBabystepAmountIndex()]);
+				OM::IterateAxesWhile([](OM::Axis*& axis, size_t) {
+					if (axis != nullptr && axis->letter[0] == 'Z')
+					{
+						axis->babystep += babystepAmountsF[nvData.GetBabystepAmountIndex()];
+						return false;
+					}
+					return true;
+				});
+				RefreshTunePage();
 				currentButton.Clear();
 				break;
 
 			case evTuneZMinus:
 				SerialIo::Sendf("M290 Z-%s\n", babystepAmounts[nvData.GetBabystepAmountIndex()]);
+				OM::IterateAxesWhile([](OM::Axis*& axis, size_t) {
+					if (axis != nullptr && axis->letter[0] == 'Z')
+					{
+						axis->babystep -= babystepAmountsF[nvData.GetBabystepAmountIndex()];
+						return false;
+					}
+					return true;
+				});
+				RefreshTunePage();
 				currentButton.Clear();
 				break;
 
@@ -7966,6 +8118,8 @@ namespace UI
 				break;
 
 			case evStatusJobPageUp:
+				mgr.Press(bp, false);
+				currentButton.Clear();
 				if (statusJobCanScrollEarlier)
 				{
 					FileManager::ScrollFilesPage(-static_cast<int>(StatusJobRows));
@@ -7978,6 +8132,8 @@ namespace UI
 				break;
 
 			case evStatusJobPageDown:
+				mgr.Press(bp, false);
+				currentButton.Clear();
 				if (statusJobCanScrollLater)
 				{
 					FileManager::ScrollFilesPage(static_cast<int>(StatusJobRows));
@@ -8291,36 +8447,59 @@ namespace UI
 					break;
 				case StandardPopupContext::TuneSpeed:
 					SerialIo::Sendf("M220 S%d\n", tunePopupPercent);
+					tuneSpeedPercent = tunePopupPercent;
 					CloseStandardPopup();
 					tunePopupKind = TunePopupKind::None;
 					tunePopupResource = -1;
+					RefreshTunePage();
+					mgr.Refresh(false);
 					break;
 				case StandardPopupContext::TuneFan:
 					if (tunePopupResource >= 0)
 					{
 						SerialIo::Sendf("M106 P%d S%.3f\n", tunePopupResource, (double)tunePopupPercent / 100.0);
+						if (tunePopupResource < (int)TuneMaxFans)
+						{
+							tuneFanPercent[tunePopupResource] = tunePopupPercent;
+							tuneFanValid[tunePopupResource] = true;
+						}
 					}
 					CloseStandardPopup();
 					tunePopupKind = TunePopupKind::None;
 					tunePopupResource = -1;
+					RefreshTunePage();
+					mgr.Refresh(false);
 					break;
 				case StandardPopupContext::TuneFlow:
 					if (tunePopupResource >= 0)
 					{
 						SerialIo::Sendf("M221 D%d S%d\n", tunePopupResource, tunePopupPercent);
+						if (tunePopupResource < (int)TuneMaxExtruders)
+						{
+							tuneExtruderFactor[tunePopupResource] = tunePopupPercent;
+						}
 					}
 					CloseStandardPopup();
 					tunePopupKind = TunePopupKind::None;
 					tunePopupResource = -1;
+					RefreshTunePage();
+					mgr.Refresh(false);
 					break;
 				case StandardPopupContext::TunePressureAdvance:
 					if (tunePopupResource >= 0)
 					{
 						SerialIo::Sendf("M572 D%d S%.4f\n", tunePopupResource, (double)tunePopupPa);
+						if (tunePopupResource < (int)TuneMaxExtruders)
+						{
+							tunePressureAdvance[tunePopupResource] = tunePopupPa;
+							tunePressureAdvanceValid[tunePopupResource] = true;
+						}
 					}
 					CloseStandardPopup();
 					tunePopupKind = TunePopupKind::None;
 					tunePopupResource = -1;
+					RefreshTunePage();
+					mgr.Refresh(false);
 					break;
 				case StandardPopupContext::StatusObjectCancel:
 					CloseStandardPopup();
@@ -9341,6 +9520,15 @@ namespace UI
 			default:
 				break;
 			}
+#if DISPLAY_X == 800
+			// Many modern actions switch roots or open/close popups immediately.
+			// Release the button object that was actually touched so its accent
+			// pressed fill cannot remain stuck on an old root/popup.
+			if (!KeepModernButtonHighlighted(f))
+			{
+				mgr.Press(bp, false);
+			}
+#endif
 		}
 	}
 
@@ -9441,17 +9629,21 @@ namespace UI
 		}
 	}
 
-	void DisplayFilesPopup(int cardNumber, unsigned int numVolumes)
+	void DisplayFilesPopup(int cardNumber, unsigned int numMountedVolumes)
 	{
-		filePopupTitleField->SetValue(cardNumber);
-		mgr.Show(changeCardButton, numVolumes > 1);
 #if DISPLAY_X == 800
-		statusJobNumVolumes = numVolumes;
+		// The modern 800x480 UI owns the embedded STATUS > JOB browser. Never
+		// open the legacy file-list popup when changing storage volumes.
+		UNUSED(cardNumber);
+		statusJobNumVolumes = numMountedVolumes;
 		if (statusJobSdButton != nullptr)
 		{
-			mgr.Show(statusJobSdButton, numVolumes > 1);
+			mgr.Show(statusJobSdButton, numMountedVolumes > 1);
 		}
-#endif
+		return;
+#else
+		filePopupTitleField->SetValue(cardNumber);
+		mgr.Show(changeCardButton, numMountedVolumes > 1);
 
 		if (isLandscape)
 		{
@@ -9463,17 +9655,19 @@ namespace UI
 			fileListPopupNoFiles->Show(true);
 			mgr.SetPopup(fileListPopup, AutoPlace, AutoPlace);
 		}
+#endif
 	}
 
-	void FileListCardButtonUpdate(unsigned int numVolumes)
+	void FileListCardButtonUpdate(unsigned int numMountedVolumes)
 	{
-		mgr.Show(changeCardButton, numVolumes > 1);
 #if DISPLAY_X == 800
-		statusJobNumVolumes = numVolumes;
+		statusJobNumVolumes = numMountedVolumes;
 		if (statusJobSdButton != nullptr)
 		{
-			mgr.Show(statusJobSdButton, numVolumes > 1);
+			mgr.Show(statusJobSdButton, numMountedVolumes > 1);
 		}
+#else
+		mgr.Show(changeCardButton, numMountedVolumes > 1);
 #endif
 	}
 
@@ -9519,12 +9713,21 @@ namespace UI
 		statusJobCanScrollEarlier = scrollEarlier;
 		statusJobCanScrollLater = scrollLater;
 		statusJobInSubdir = parentDir;
+
+		// A page arrow may disappear as a direct result of the press that changed
+		// pages. Clear its pressed state and touch event before hiding it so no
+		// white pressed outline can remain on the last/first page.
 		if (statusJobPageUpButton != nullptr)
 		{
-			mgr.Show(statusJobPageUpButton, scrollEarlier || parentDir);
+			const bool showUp = scrollEarlier || parentDir;
+			statusJobPageUpButton->Press(false, 0);
+			statusJobPageUpButton->SetEvent(showUp ? evStatusJobPageUp : evNull, 0);
+			mgr.Show(statusJobPageUpButton, showUp);
 		}
 		if (statusJobPageDownButton != nullptr)
 		{
+			statusJobPageDownButton->Press(false, 0);
+			statusJobPageDownButton->SetEvent(scrollLater ? evStatusJobPageDown : evNull, 0);
 			mgr.Show(statusJobPageDownButton, scrollLater);
 		}
 #else
@@ -9543,15 +9746,29 @@ namespace UI
 		}
 
 		ModernTextButton * const button = statusJobFileButtons[buttonIndex];
-		const bool isDirectory = (text != nullptr && text[0] == '*');
+		const bool hasEntry = (text != nullptr && text[0] != 0);
+		const bool isDirectory = (hasEntry && text[0] == '*');
+
+		// FileManager may supply an empty string for an unused row. Treat that
+		// exactly like nullptr: no tile, no event and no retained pressed outline.
+		if (!hasEntry)
+		{
+			button->Press(false, 0);
+			button->SetText(nullptr);
+			button->SetEvent(evNull, static_cast<const char *>(nullptr));
+			button->SetBorderVisible(false);
+			mgr.Show(button, false);
+			return;
+		}
+
 		button->SetText(isDirectory ? text + 1 : text);
-		button->SetEvent((text == nullptr) ? evNull : evStatusJobFile, param);
+		button->SetEvent(evStatusJobFile, param);
 		button->SetBorderVisible(isDirectory);
 		if (isDirectory)
 		{
 			button->SetBorderColour(UTFT::fromRGB(59, 67, 79));
 		}
-		mgr.Show(button, text != nullptr);
+		mgr.Show(button, true);
 #else
 		UNUSED(buttonIndex);
 		UNUSED(text);
@@ -9565,12 +9782,18 @@ namespace UI
 		controlMacroCanScrollEarlier = scrollEarlier;
 		controlMacroCanScrollLater = scrollLater;
 		controlMacroInSubdir = parentDir;
+
 		if (controlMacroPageUpButton != nullptr)
 		{
-			mgr.Show(controlMacroPageUpButton, scrollEarlier || parentDir);
+			const bool showUp = scrollEarlier || parentDir;
+			controlMacroPageUpButton->Press(false, 0);
+			controlMacroPageUpButton->SetEvent(showUp ? evControlMacroPageUp : evNull, 0);
+			mgr.Show(controlMacroPageUpButton, showUp);
 		}
 		if (controlMacroPageDownButton != nullptr)
 		{
+			controlMacroPageDownButton->Press(false, 0);
+			controlMacroPageDownButton->SetEvent(scrollLater ? evControlMacroPageDown : evNull, 0);
 			mgr.Show(controlMacroPageDownButton, scrollLater);
 		}
 #else
@@ -9589,21 +9812,29 @@ namespace UI
 		}
 
 		ModernTextButton * const button = controlMacroFileButtons[buttonIndex];
-		const bool isDirectory = (text != nullptr && text[0] == '*');
-		const char *displayText = text;
-		if (displayText != nullptr)
+		const bool hasEntry = (text != nullptr && text[0] != 0);
+		const bool isDirectory = (hasEntry && text[0] == '*');
+
+		if (!hasEntry)
 		{
-			displayText = isDirectory ? displayText + 1 : displayText;
-			displayText = SkipDigitsAndUnderscore(displayText);
+			button->Press(false, 0);
+			button->SetText(nullptr);
+			button->SetEvent(evNull, static_cast<const char *>(nullptr));
+			button->SetBorderVisible(false);
+			mgr.Show(button, false);
+			return;
 		}
+
+		const char *displayText = isDirectory ? text + 1 : text;
+		displayText = SkipDigitsAndUnderscore(displayText);
 		button->SetText(displayText);
-		button->SetEvent((text == nullptr) ? evNull : evControlMacroFile, param);
+		button->SetEvent(evControlMacroFile, param);
 		button->SetBorderVisible(isDirectory);
 		if (isDirectory)
 		{
 			button->SetBorderColour(UTFT::fromRGB(59, 67, 79));
 		}
-		mgr.Show(button, text != nullptr);
+		mgr.Show(button, true);
 #else
 		UNUSED(buttonIndex);
 		UNUSED(text);
@@ -9859,10 +10090,6 @@ namespace UI
 		ResetToolAndHeaterStates();
 		AdjustControlPageMacroButtons();
 #if DISPLAY_X == 800
-		if (tuneToolNumberButtons[0] != nullptr)
-		{
-			RefreshTuneToolRows();
-		}
 		if (controlToolHeaderCards[0] != nullptr)
 		{
 			RefreshControlToolsPage();
@@ -10017,6 +10244,7 @@ namespace UI
 		{
 			return;
 		}
+		const bool statusChanged = (tool->status != status);
 		tool->status = status;
 		Colour c = /*(status == OM::ToolStatus::standby) ? colours->standbyBackColour : */
 					(status == OM::ToolStatus::active) ? colours->activeBackColour
@@ -10026,7 +10254,7 @@ namespace UI
 			toolButtons[tool->slot]->SetColours(colours->buttonTextColour, c);
 		}
 #if DISPLAY_X == 800
-		if (currentUiPage == UiPage::ControlTools) RefreshControlToolsPage();
+		if (statusChanged && currentUiPage == UiPage::ControlTools) RefreshControlToolsPage();
 #endif
 	}
 
@@ -10037,10 +10265,6 @@ namespace UI
 		{
 			tool->extruders.SetBit(extruder);
 #if DISPLAY_X == 800
-			if (tuneToolNumberButtons[0] != nullptr)
-			{
-				RefreshTuneToolRows();
-			}
 			if (controlExtrudeActiveToolCard != nullptr)
 			{
 				RefreshControlExtrudeTools();
@@ -10056,14 +10280,6 @@ namespace UI
 		{
 			tool->fans.SetBit(fan);
 #if DISPLAY_X == 800
-			if (tuneToolNumberButtons[0] != nullptr)
-			{
-				RefreshTuneToolRows();
-				// Fan names and tool-to-fan assignments may arrive in either order.
-				// Re-evaluate FAN_AUX/FAN_CHA after the tool mapping changes so
-				// a tool-associated fan is never left classified as a general fan.
-				RefreshTuneGeneralFans();
-			}
 			if (currentUiPage == UiPage::StatusJobStatus)
 			{
 				RefreshJobStatusTilesByType(JobStatusTileType::FanPart);
@@ -10084,10 +10300,6 @@ namespace UI
 		{
 			tool->fans.Clear();
 #if DISPLAY_X == 800
-			if (tuneToolNumberButtons[0] != nullptr)
-			{
-				RefreshTuneToolRows();
-			}
 			if (currentUiPage == UiPage::StatusJobStatus)
 			{
 				RefreshJobStatusTilesByType(JobStatusTileType::FanPart);
@@ -10183,13 +10395,6 @@ namespace UI
 				{
 					babystepOffsetField->SetValue(f);
 				}
-#if DISPLAY_X == 800
-				if (tuneZOffsetButton != nullptr)
-				{
-					tuneZOffsetText.printf("%.3f", (double)f);
-					tuneZOffsetButton->SetText(tuneZOffsetText.c_str());
-				}
-#endif
 			}
 		}
 	}
