@@ -2247,14 +2247,15 @@ static void CreateSetupTabFields(const ColourScheme& colours)
 		mgr.AddField(b);
 	}
 
-	// Row 4 middle slot: read-only live free-RAM monitor. Keep the standard
-	// 200x60 SETTINGS tile and show the value on one centred line. The global
-	// freeMem pointer is refreshed by PanelDue::UpdateDebugInfo().
-	mgr.AddField(new ModernCard(380, 350, 200, 60, tile, neutralBorder, false));
+	// Row 4 middle slot: read-only live free-RAM monitor.
+	// Add the text field first, then the card, because AddField() prepends fields.
+	// This makes the card render first and the RAM text render on top.
 	DisplayField::SetDefaultColours(text, tile);
 	freeMem = new IntegerField(399, 360, 180, TextAlignment::Centre, "RAM ", " B");
 	freeMem->SetValue((int)GetFreeMemory());
 	mgr.AddField(freeMem);
+
+	mgr.AddField(new ModernCard(380, 350, 200, 60, tile, neutralBorder, false));
 
 	DisplayField::SetDefaultColours(UTFT::fromRGB(245,245,245), resetRed);
 	mgr.AddField(new ModernTextButton(380, 582, 200, 60, "FACTORY RESET", evSettingsFactoryResetOpen, 0, glcd19x21, false));
