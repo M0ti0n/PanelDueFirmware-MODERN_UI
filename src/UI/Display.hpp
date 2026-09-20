@@ -377,7 +377,10 @@ public:
 	// Change the value
 	void SetValue(const char* _ecv_array null pt, bool forceUpdate = false)
 	{
-		if (!forceUpdate && strcmp(text, pt) == 0)
+		// If 'pt' is the very buffer we already point to, its contents may have been rewritten in place,
+		// so comparing it with itself proves nothing: always repaint in that case. (Most modern-UI fields are
+		// fed from a fixed String<> buffer, which used to make every update after the first one a no-op.)
+		if (!forceUpdate && pt != text && text != nullptr && pt != nullptr && strcmp(text, pt) == 0)
 		{
 			return;
 		}

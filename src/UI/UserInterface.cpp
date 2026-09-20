@@ -3063,6 +3063,7 @@ static void CreateControlToolsTabFields(const ColourScheme& colours)
 	AddTopTab(1, 4, "MOVE", evControlMovement);
 	AddTopTab(2, 4, "EXTRUDE", evControlExtrusion);
 	AddTopTab(3, 4, "MACROS", evControlMacros);
+	AddTopTabBackground();
 	controlToolsRoot = mgr.GetRoot();
 
 	// Background is intentionally added last so it is painted first by the linked-list renderer.
@@ -3865,6 +3866,7 @@ static void CreateControlMovementTabFields(const ColourScheme& colours)
 	AddTopTab(1, 4, "MOVE", evControlMovement);
 	AddTopTab(2, 4, "EXTRUDE", evControlExtrusion);
 	AddTopTab(3, 4, "MACROS", evControlMacros);
+	AddTopTabBackground();
 	controlMovementRoot = mgr.GetRoot();
 
 	// Page background is added last because Window::AddField prepends fields.
@@ -4138,6 +4140,7 @@ static void CreateControlExtrusionTabFields(const ColourScheme& colours)
 	AddTopTab(1, 4, "MOVE", evControlMovement);
 	AddTopTab(2, 4, "EXTRUDE", evControlExtrusion);
 	AddTopTab(3, 4, "MACROS", evControlMacros);
+	AddTopTabBackground();
 	controlExtrusionRoot = mgr.GetRoot();
 
 	mgr.SetRoot(controlExtrusionRoot);
@@ -4602,6 +4605,7 @@ static void CreateControlMacrosTabFields(const ColourScheme& colours)
 	AddTopTab(1, 4, "MOVE", evControlMovement);
 	AddTopTab(2, 4, "EXTRUDE", evControlExtrusion);
 	AddTopTab(3, 4, "MACROS", evControlMacros);
+	AddTopTabBackground();
 	controlMacrosRoot = mgr.GetRoot();
 
 	// Page background is added last because Window::AddField prepends fields.
@@ -5646,7 +5650,14 @@ namespace UI
 		infoTimeout = p_infoTimeout;
 
 		// Set up default colours and margins
+#if DISPLAY_X == 800
+		// The modern UI is always dark. Window::Show(false)/Redraw() erase hidden fields with the main window's
+		// background colour, and the default colour scheme's is white, which left white tiles behind hidden
+		// buttons (PAUSE/ABORT, list arrows and unused list rows). Use the page background instead.
+		mgr.Init(UTFT::fromRGB(18, 22, 28));		// #12161c
+#else
 		mgr.Init(colours.defaultBackColour);
+#endif
 		DisplayField::SetDefaultFont(DEFAULT_FONT);
 		ButtonWithText::SetFont(DEFAULT_FONT);
 		CharButtonRow::SetFont(DEFAULT_FONT);

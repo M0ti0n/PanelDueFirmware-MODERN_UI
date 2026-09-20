@@ -956,6 +956,18 @@ ModernStopButton::ModernStopButton(PixelNumber py, PixelNumber px, PixelNumber p
 	SetEvent(e, 0);
 }
 
+// Fill a regular octagon whose flat sides are 'r' pixels from the centre, using one horizontal strip per row.
+static void FillOctagon(int cx, int cy, int r)
+{
+	const int flatHalf = (r * 4142) / 10000;			// half the length of a flat side: r * tan(22.5 degrees)
+	for (int dy = -r; dy <= r; ++dy)
+	{
+		const int ady = (dy < 0) ? -dy : dy;
+		const int hw = (ady <= flatHalf) ? r : r - (ady - flatHalf);
+		lcd.fillRect(cx - hw, cy + dy, cx + hw, cy + dy);
+	}
+}
+
 void ModernStopButton::Refresh(bool full, PixelNumber xOffset, PixelNumber yOffset)
 {
 	if (!full && !changed)
@@ -963,35 +975,29 @@ void ModernStopButton::Refresh(bool full, PixelNumber xOffset, PixelNumber yOffs
 		return;
 	}
 
-	const Colour railBg = UTFT::fromRGB(18, 22, 28);       // #12161c
+	const Colour railBg = UTFT::fromRGB(42, 50, 64);       // #2a3240, same as the rail card behind it
 	const Colour stopRed = pressed ? UTFT::fromRGB(160, 39, 35) : UTFT::fromRGB(201, 50, 24); // #C93218 fixed safety red
-	const Colour stopText = UTFT::fromRGB(245, 245, 245);
+	const Colour glyph = UTFT::fromRGB(245, 245, 245);
 	const PixelNumber left = x + xOffset;
 	const PixelNumber top = y + yOffset;
 	const PixelNumber right = left + width - 1;
 	const PixelNumber bottom = top + height - 1;
 
-	// A plain rounded-square tile (same fillRoundRect corner treatment as
-	// every other content-area tile), filled with the fixed safety red and
-	// labelled STOP, matching the mock-up rather than the earlier octagonal
-	// road-sign shape.
+	// Plain rounded-square tile filled with the fixed safety red, exactly as before.
 	lcd.setColor(railBg);
 	lcd.fillRect(left, top, right, bottom);
 	lcd.setColor(stopRed);
 	lcd.fillRoundRect(left, top, right, bottom);
 
-	lcd.setTransparentBackground(true);
-	lcd.setColor(stopText);
-	lcd.setFont(font);
-	lcd.setTextPos(0, 9999, static_cast<PixelNumber>(width) - 12);
-	lcd.printf("STOP");
-	const PixelNumber textWidth = lcd.getTextX();
-	const PixelNumber fontHeight = UTFT::GetFontHeight(font);
-	const PixelNumber tx = left + ((width > textWidth) ? (width - textWidth) / 2 : 2);
-	const PixelNumber ty = top + ((height > fontHeight) ? (height - fontHeight) / 2 : 0);
-	lcd.setTextPos(tx, ty, right - 3);
-	lcd.printf("STOP");
-	lcd.setTransparentBackground(false);
+	// Icon instead of the word STOP: a white octagon outline (stop-sign shape) with a solid square inside.
+	const int cx = static_cast<int>(left + width / 2);
+	const int cy = static_cast<int>(top + height / 2);
+	lcd.setColor(glyph);
+	FillOctagon(cx, cy, 27);
+	lcd.setColor(stopRed);
+	FillOctagon(cx, cy, 22);
+	lcd.setColor(glyph);
+	lcd.fillRect(cx - 8, cy - 8, cx + 8, cy + 8);
 	changed = false;
 }
 
@@ -1010,15 +1016,15 @@ void ModernAlertNavButton::Refresh(bool full, PixelNumber xOffset, PixelNumber y
 		return;
 	}
 
-	const Colour railBg = UTFT::fromRGB(18, 22, 28);       // #12161c
-	const Colour pressedBg = UTFT::fromRGB(28, 34, 43);    // #1c222b
+	const Colour tileBg = UTFT::fromRGB(28, 34, 43);       // #1c222b, same tile fill as the CONTROL/STATUS/SYSTEM buttons
+	const Colour pressedBg = UTFT::fromRGB(42, 50, 64);    // #2a3240
 	const Colour alertRed = UTFT::fromRGB(201, 50, 24);    // #C93218 semantic alert red
 	const PixelNumber left = x + xOffset;
 	const PixelNumber top = y + yOffset;
 	const PixelNumber right = left + width - 1;
 	const PixelNumber bottom = top + height - 1;
 
-	lcd.setColor(pressed ? pressedBg : railBg);
+	lcd.setColor(pressed ? pressedBg : tileBg);
 	lcd.fillRoundRect(left, top, right, bottom);
 
 	const int cx = static_cast<int>(left + width/2);
@@ -1040,9 +1046,10 @@ void ModernAlertNavButton::Refresh(bool full, PixelNumber xOffset, PixelNumber y
 	lcd.fillCircle(cx - halfWidth, triangleBottom, 2);
 	lcd.fillCircle(cx + halfWidth, triangleBottom, 2);
 
-	// Vector exclamation mark.
-	lcd.fillRoundRect(cx - 2, triangleTop + 13, cx + 2, triangleBottom - 13);
-	lcd.fillCircle(cx, triangleBottom - 7, 2);
+	// Vector exclamation mark. Use fillRect for the stem: UTFT::fillRoundRect() draws nothing when the
+	// rectangle is 5 pixels wide or less, which is why the stem used to be missing.
+	lcd.fillRect(cx - 3, triangleTop + 21, cx + 3, triangleTop + 42);
+	lcd.fillCircle(cx, triangleBottom - 10, 3);
 	changed = false;
 }
 
@@ -1060,12 +1067,12 @@ void ModernMasterNavButton::Refresh(bool full, PixelNumber xOffset, PixelNumber 
 		return;
 	}
 
-	const Colour tileBg = UTFT::fromRGB(28, 34, 43);          // #1c222b, inactive tile
+	const Colour tileBg = UTFT::fromRGB(28, 34, 43);          // #1c222b, tile fill in every state
 	const Colour glyphLight = UTFT::fromRGB(154, 164, 178);   // inactive glyph
-	const Colour glyphDark = UTFT::fromRGB(18, 22, 28);       // #12161c, glyph on active fill
-	const bool active = pressed;
-	const Colour fill = active ? bcolour : tileBg;            // bcolour already carries the current Accent colour
-	const Colour glyph = active ? glyphDark : glyphLight;
+	const Colour accent = borderColour;                       // the current Accent colour (set when the rail is created)
+	const bool active = pressed;                              // selected tab, or finger currently down
+	const Colour fill = tileBg;
+	const Colour glyph = active ? accent : glyphLight;
 
 	const PixelNumber left = x + xOffset;
 	const PixelNumber top = y + yOffset;
@@ -1076,6 +1083,13 @@ void ModernMasterNavButton::Refresh(bool full, PixelNumber xOffset, PixelNumber 
 
 	lcd.setColor(fill);
 	lcd.fillRoundRect(left, top, right, bottom);
+	if (active)
+	{
+		// Selected: Accent outline (2 px) and Accent glyph on the normal dark tile.
+		lcd.setColor(accent);
+		lcd.drawRoundRect(left, top, right, bottom);
+		lcd.drawRoundRect(left + 1, top + 1, right - 1, bottom - 1);
+	}
 	lcd.setColor(glyph);
 
 	switch (icon)
