@@ -647,7 +647,10 @@ static FloatField *fpHeightField, *fpLayerHeightField, *babystepOffsetField;
 static TextButtonWithLabel *babystepMinusButton, *babystepPlusButton;
 static IntegerField *fpSizeField, *fpFilamentField, *filePopupTitleField;
 static ProgressBar *printProgressBar;
-static SingleButton *tabControl, *tabStatus, *tabSystem;
+static SingleButton *railStopButton, *tabControl, *tabStatus, *tabSystem, *railAlertButton;
+#if DISPLAY_X == 800
+static ModernCard *railBackground = nullptr, *topTabSeparator = nullptr;
+#endif
 static ButtonBase *filesButton, *pauseButton, *resumeButton, *cancelButton, *babystepButton, *reprintButton;
 static TextField *timeLeftField, *zProbe;
 static TextField *fpNameField, *fpGeneratedByField, *fpLastModifiedField, *fpPrintTimeField;
@@ -681,9 +684,18 @@ constexpr PixelNumber contentTop = topTabHeight;
 constexpr PixelNumber topTabRowLeft = (DISPLAY_X == 800) ? 103 : contentLeft;
 constexpr PixelNumber topTabRowWidth = (DISPLAY_X == 800) ? (DisplayX - margin - topTabRowLeft) : contentWidth;
 
-static bool IsMasterTab(const DisplayField *field)
+static bool IsPermanentRailField(const DisplayField *field)
 {
+#if DISPLAY_X == 800
+	// The whole five-button rail is one permanent UI group.  None of these
+	// fields (or the rail backing card / tab separator) may be pushed into the
+	// content pane by RelayoutLegacyFields().
+	return field == railStopButton || field == tabControl || field == tabStatus ||
+		field == tabSystem || field == railAlertButton || field == railBackground ||
+		field == topTabSeparator;
+#else
 	return field == tabControl || field == tabStatus || field == tabSystem;
+#endif
 }
 
 // Move full-screen legacy fields into the content pane to the right of the master rail.
@@ -719,7 +731,7 @@ static void RelayoutLegacyFields()
 
 			_ecv_assert(seenCount < ARRAY_SIZE(seen));
 			seen[seenCount++] = field;
-			if (IsMasterTab(field))
+			if (IsPermanentRailField(field))
 			{
 				continue;
 			}
@@ -2338,27 +2350,29 @@ static void CreateCommonFields(const ColourScheme& colours)
 
 	DisplayField::SetDefaultColours(text, tile, accent, tile, accent, accent, IconPaletteDark);
 #if DISPLAY_X == 800
-	// Permanent left rail. STOP, CONTROL, STATUS, SYSTEM and the CONSOLE
-	// warning shortcut all share the same x-position and 76x76 footprint.
-	ModernStopButton * const stopButton = new ModernStopButton(
-		5, 7, 76, 76, evEmergencyStop, DEFAULT_FONT);
-	ModernAlertNavButton * const alertButton = new ModernAlertNavButton(
-		394, 7, 76, 76, evSystemConsole);
-	tabControl = new ModernMasterNavButton(106, 7, 76, 76, MasterNavIcon::Joystick, evTabControl);
-	tabStatus = new ModernMasterNavButton(202, 7, 76, 76, MasterNavIcon::List, evTabStatus);
-	tabSystem = new ModernMasterNavButton(298, 7, 76, 76, MasterNavIcon::Gear, evTabSystem);
-	mgr.AddField(stopButton);
+	// Permanent five-button left rail.  All five controls use the same x,
+	// 76x76 footprint and 20 px vertical spacing.  Keep them as one group so
+	// the legacy content relayout can never move STOP/ALERT into the page.
+	railStopButton = new ModernStopButton(5, 7, 76, 76, evEmergencyStop, DEFAULT_FONT);
+	tabControl = new ModernMasterNavButton(101, 7, 76, 76, MasterNavIcon::Joystick, evTabControl);
+	tabStatus = new ModernMasterNavButton(197, 7, 76, 76, MasterNavIcon::List, evTabStatus);
+	tabSystem = new ModernMasterNavButton(293, 7, 76, 76, MasterNavIcon::Gear, evTabSystem);
+	railAlertButton = new ModernAlertNavButton(389, 7, 76, 76, evSystemConsole);
+	mgr.AddField(railStopButton);
 	mgr.AddField(tabControl);
 	mgr.AddField(tabStatus);
 	mgr.AddField(tabSystem);
-	mgr.AddField(alertButton);
-	// Add the rail background last because AddField() prepends. It therefore
-	// paints first, with STOP/master-nav/console controls rendered on top.
-	mgr.AddField(new ModernCard(0, 0, masterTabWidth, DisplayY, railBg, railBg, false));
-	// Thin Accent-coloured separator directly under the top tab row. Shared
-	// here on baseRoot so every page (CONTROL/STATUS/SYSTEM subtabs) inherits
-	// it without needing to add it three times.
-	mgr.AddField(new ModernCard(topTabHeight, topTabRowLeft, topTabRowWidth, 3, accent, accent, false));
+	mgr.AddField(railAlertButton);
+
+	// The backing card is part of the permanent rail too.  Keeping a pointer to
+	// it is intentional: RelayoutLegacyFields() uses that identity to leave it
+	// at x=0 instead of scaling/shifting it into the content pane.
+	railBackground = new ModernCard(0, 0, masterTabWidth, DisplayY, railBg, railBg, false);
+	mgr.AddField(railBackground);
+
+	// Same rule for the shared Accent separator under the top tab row.
+	topTabSeparator = new ModernCard(topTabHeight, topTabRowLeft, topTabRowWidth, 3, accent, accent, false);
+	mgr.AddField(topTabSeparator);
 #else
 	// Preserve the compact-display rail geometry; the mock-up corner controls
 	// are specific to the 800x480 modern UI.
