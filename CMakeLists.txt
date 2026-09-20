@@ -23,7 +23,7 @@ project( paneldue
 add_executable( paneldue.elf )
 
 # basic compiler flags
-set( BASIC_C_FLAGS "-O2 -g -DNDEBUG -DBOARD=USER_BOARD" )
+set( BASIC_C_FLAGS "-Os -g -DNDEBUG -DBOARD=USER_BOARD" )
 
 # SAM3S4 configuration
 file( REAL_PATH "src/ASF/sam/utils/linker_scripts/sam3s/sam3s4/gcc/flash.ld" LINKER_FILE_SAM3S4 )
