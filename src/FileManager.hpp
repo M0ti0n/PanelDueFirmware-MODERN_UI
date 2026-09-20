@@ -25,7 +25,7 @@ namespace FileManager
 		Path requestedPath;
 		Path currentPath;
 		RequestTimer timer;
-		int whichList;
+		bool listLoaded;
 		int scrollOffset;
 		int statusJobScrollOffset;
 		int controlMacroScrollOffset;
@@ -36,12 +36,10 @@ namespace FileManager
 	public:
 		FileSet(const char * _ecv_array rootDir, unsigned numDisp, bool pIsFilesList);
 		void Display();
-		void Reload(int whichList, const Path& dir, int errCode);
+		void Reload(const Path& dir, int errCode);
 		void ReloadMacroShortList(int errorCode);
 		void FileListUpdated();
 		void Scroll(int amount);
-		void SetIndex(int index) { whichList = index; }
-		int GetIndex() const { return whichList; }
 		void SetPath(const char * _ecv_array pPath);
 		const char * _ecv_array GetPath() { return currentPath.c_str(); }
 		void RequestParentDir()

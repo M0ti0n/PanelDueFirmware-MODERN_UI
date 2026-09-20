@@ -19,28 +19,46 @@
 #undef max
 
 #if SAM4S
-// We have 64Kb SRAM on the SAM4S4B so we can support larger file lists
-constexpr size_t FileListSize = 4096;
-constexpr size_t MaxFiles = 200;
+// Modern 800x480 build: independent caches sized to the 6-row UI.
+// JOB: 96 entries = 16 pages. MACROS: 42 entries = 7 pages.
+// The receive buffer is sized for the larger JOB list so a new listing can
+// be received before it replaces the active cache.
+constexpr size_t JobFileListSize = 2048;
+constexpr size_t JobMaxFiles = 96;
+constexpr size_t MacroFileListSize = 1024;
+constexpr size_t MacroMaxFiles = 42;
+constexpr size_t ReceiveFileListSize = 2048;
+constexpr size_t ReceiveMaxFiles = 96;
 #else
-// We have only 32Kb or 48Kb SRAM on the SAM3S2B or SAM3S4B
-constexpr size_t FileListSize = 2048;
-constexpr size_t MaxFiles = 100;
+constexpr size_t JobFileListSize = 2048;
+constexpr size_t JobMaxFiles = 96;
+constexpr size_t MacroFileListSize = 1024;
+constexpr size_t MacroMaxFiles = 42;
+constexpr size_t ReceiveFileListSize = 2048;
+constexpr size_t ReceiveMaxFiles = 96;
 #endif
 
 namespace FileManager
 {
-	typedef Vector<char, FileListSize> FileList;				// we use a Vector instead of a String because we store multiple null-terminated strings in it
-	typedef Vector<const char* _ecv_array, MaxFiles> FileListIndex;
+	typedef Vector<char, JobFileListSize> JobFileList;
+	typedef Vector<const char* _ecv_array, JobMaxFiles> JobFileListIndex;
+	typedef Vector<char, MacroFileListSize> MacroFileList;
+	typedef Vector<const char* _ecv_array, MacroMaxFiles> MacroFileListIndex;
+	typedef Vector<char, ReceiveFileListSize> ReceiveFileList;
+	typedef Vector<const char* _ecv_array, ReceiveMaxFiles> ReceiveFileListIndex;
 
 	const char * _ecv_array filesRoot = "0:/gcodes";
 	const char * _ecv_array macrosRoot = "0:/macros";
 	const uint32_t FileListRequestTimeout = 8000;				// file info request timeout in milliseconds
 
-	static FileList fileLists[3];								// one for gcode file list, one for macro list, one for receiving new lists into
-	static FileListIndex fileIndices[3];						// pointers into the individual filenames in the list
+	static JobFileList jobFileList;
+	static JobFileListIndex jobFileIndex;
+	static MacroFileList macroFileList;
+	static MacroFileListIndex macroFileIndex;
+	static ReceiveFileList receiveFileList;
+	static ReceiveFileListIndex receiveFileIndex;
 
-	static int newFileList = -1;								// which file list we received a new listing into
+	static bool receivingFileList = false;
 	static int errorCode;
 	static Path fileDirectoryName;
 	static FileSet gcodeFilesList(filesRoot, NumDisplayedFiles, true);
@@ -54,8 +72,36 @@ namespace FileManager
 		return strcasecmp(a, b) > 0;
 	}
 
+	static size_t GetStoredFileCount(bool filesList)
+	{
+		return filesList ? jobFileIndex.Size() : macroFileIndex.Size();
+	}
+
+	static const char * _ecv_array GetStoredFile(bool filesList, size_t index)
+	{
+		return filesList ? jobFileIndex[index] : macroFileIndex[index];
+	}
+
+	template<class DestList, class DestIndex>
+	static void CopyReceivedList(DestList& destList, DestIndex& destIndex)
+	{
+		destList.Clear();
+		destIndex.Clear();
+		for (size_t i = 0; i < receiveFileIndex.Size(); ++i)
+		{
+			const char * const name = receiveFileIndex[i];
+			const size_t len = strlen(name) + 1;
+			if (len + destList.Size() >= destList.Capacity() || destIndex.Size() >= destIndex.Capacity())
+			{
+				break;
+			}
+			destIndex.Add(destList.c_ptr() + destList.Size());
+			destList.Add(name, len);
+		}
+	}
+
 	FileSet::FileSet(const char * _ecv_array rootDir, unsigned int numDisp, bool pIsFilesList)
-		: numDisplayed(numDisp), currentPath(), timer(FileListRequestTimeout, "", requestedPath.c_str()), whichList(-1), scrollOffset(0), statusJobScrollOffset(0), controlMacroScrollOffset(0),
+		: numDisplayed(numDisp), currentPath(), timer(FileListRequestTimeout, "", requestedPath.c_str()), listLoaded(false), scrollOffset(0), statusJobScrollOffset(0), controlMacroScrollOffset(0),
 		  isFilesList(pIsFilesList), cardNumber(0)
 	{
 		requestedPath.copy(rootDir);
@@ -75,17 +121,17 @@ namespace FileManager
 		SetPending();							// refresh the list of files
 	}
 
-	void FileSet::Reload(int whichList, const Path& dir, int errCode)
+	void FileSet::Reload(const Path& dir, int errCode)
 	{
 		UI::FileListLoaded(isFilesList, errCode);			// do this first to show/hide the error message
 		if (errCode == 0)
 		{
-			SetIndex(whichList);
+			listLoaded = true;
 			SetPath(dir.c_str());
 		}
 		else
 		{
-			SetIndex(-1);
+			listLoaded = false;
 		}
 		FileListUpdated();
 		StatusJobPageUpdated();
@@ -97,7 +143,7 @@ namespace FileManager
 	void FileSet::ReloadMacroShortList(int errorCode)
 	{
 		unsigned int buttonNum = 0;
-		const FileListIndex& index = fileIndices[GetIndex()];
+		const MacroFileListIndex& index = macroFileIndex;
 		unsigned int fileNum = (errorCode == 0) ? 0 : index.Size();
 		bool again;
 		do
@@ -123,23 +169,23 @@ namespace FileManager
 	// Refresh the list of files or macros in the Files popup window
 	void FileSet::FileListUpdated()
 	{
-		if (whichList >= 0)
+		if (listLoaded)
 		{
-			FileListIndex& fileIndex = fileIndices[whichList];
+			const size_t fileCount = GetStoredFileCount(isFilesList);
 
 			// 2. Make sure the scroll position is still sensible
-			if (scrollOffset < 0 || fileIndex.Size() == 0)
+			if (scrollOffset < 0 || fileCount == 0)
 			{
 				scrollOffset = 0;
 			}
-			else if ((unsigned int)scrollOffset >= fileIndex.Size())
+			else if ((unsigned int)scrollOffset >= fileCount)
 			{
 				const unsigned int scrollAmount = UI::GetNumScrolledFiles(isFilesList);
-				scrollOffset = ((fileIndex.Size() - 1)/scrollAmount) * scrollAmount;
+				scrollOffset = ((fileCount - 1)/scrollAmount) * scrollAmount;
 			}
 
 			// 3. Display the scroll buttons if needed
-			UI::EnableFileNavButtons(isFilesList, scrollOffset != 0, scrollOffset + numDisplayed < fileIndex.Size(), IsInSubdir());
+			UI::EnableFileNavButtons(isFilesList, scrollOffset != 0, scrollOffset + numDisplayed < fileCount, IsInSubdir());
 
 			if (isFilesList)
 			{
@@ -149,9 +195,9 @@ namespace FileManager
 			// 4. Display the file list
 			for (size_t i = 0; i < numDisplayed; ++i)
 			{
-				if (i + scrollOffset < fileIndex.Size())
+				if (i + scrollOffset < fileCount)
 				{
-					const char *text = fileIndex[i + scrollOffset];
+					const char *text = GetStoredFile(isFilesList, i + scrollOffset);
 					UI::UpdateFileButton(isFilesList, i, (isFilesList) ? text : SkipDigitsAndUnderscore(text), text);
 				}
 				else
@@ -189,25 +235,25 @@ namespace FileManager
 			return;
 		}
 
-		if (whichList >= 0)
+		if (listLoaded)
 		{
-			FileListIndex& fileIndex = fileIndices[whichList];
-			if (statusJobScrollOffset < 0 || fileIndex.Size() == 0)
+			const size_t fileCount = jobFileIndex.Size();
+			if (statusJobScrollOffset < 0 || fileCount == 0)
 			{
 				statusJobScrollOffset = 0;
 			}
-			else if ((unsigned int)statusJobScrollOffset >= fileIndex.Size())
+			else if ((unsigned int)statusJobScrollOffset >= fileCount)
 			{
-				statusJobScrollOffset = ((fileIndex.Size() - 1) / JobRows) * JobRows;
+				statusJobScrollOffset = ((fileCount - 1) / JobRows) * JobRows;
 			}
 
 			UI::EnableStatusJobNavButtons(statusJobScrollOffset != 0,
-				statusJobScrollOffset + JobRows < fileIndex.Size(), IsInSubdir());
+				statusJobScrollOffset + JobRows < fileCount, IsInSubdir());
 			for (unsigned int i = 0; i < JobRows; ++i)
 			{
-				if (i + statusJobScrollOffset < fileIndex.Size())
+				if (i + statusJobScrollOffset < fileCount)
 				{
-					const char * const entry = fileIndex[i + statusJobScrollOffset];
+					const char * const entry = jobFileIndex[i + statusJobScrollOffset];
 					UI::UpdateStatusJobFileButton(i, entry, entry);
 				}
 				else
@@ -242,7 +288,7 @@ namespace FileManager
 	void FileSet::RequestStatusJobSubdir(const char * _ecv_array dir)
 	{
 		statusJobScrollOffset = 0;
-		whichList = -1;
+		listLoaded = false;
 		StatusJobPageUpdated();
 
 		requestedPath.copy(currentPath.c_str());
@@ -257,7 +303,7 @@ namespace FileManager
 	void FileSet::RequestStatusJobParentDir()
 	{
 		statusJobScrollOffset = 0;
-		whichList = -1;
+		listLoaded = false;
 		StatusJobPageUpdated();
 
 		size_t end = currentPath.strlen();
@@ -292,25 +338,25 @@ namespace FileManager
 			return;
 		}
 
-		if (whichList >= 0)
+		if (listLoaded)
 		{
-			FileListIndex& fileIndex = fileIndices[whichList];
-			if (controlMacroScrollOffset < 0 || fileIndex.Size() == 0)
+			const size_t fileCount = macroFileIndex.Size();
+			if (controlMacroScrollOffset < 0 || fileCount == 0)
 			{
 				controlMacroScrollOffset = 0;
 			}
-			else if ((unsigned int)controlMacroScrollOffset >= fileIndex.Size())
+			else if ((unsigned int)controlMacroScrollOffset >= fileCount)
 			{
-				controlMacroScrollOffset = ((fileIndex.Size() - 1) / MacroRows) * MacroRows;
+				controlMacroScrollOffset = ((fileCount - 1) / MacroRows) * MacroRows;
 			}
 
 			UI::EnableControlMacroNavButtons(controlMacroScrollOffset != 0,
-				controlMacroScrollOffset + MacroRows < fileIndex.Size(), IsInSubdir());
+				controlMacroScrollOffset + MacroRows < fileCount, IsInSubdir());
 			for (unsigned int i = 0; i < MacroRows; ++i)
 			{
-				if (i + controlMacroScrollOffset < fileIndex.Size())
+				if (i + controlMacroScrollOffset < fileCount)
 				{
-					const char * const entry = fileIndex[i + controlMacroScrollOffset];
+					const char * const entry = macroFileIndex[i + controlMacroScrollOffset];
 					UI::UpdateControlMacroFileButton(i, entry, entry);
 				}
 				else
@@ -345,7 +391,7 @@ namespace FileManager
 	void FileSet::RequestControlMacrosSubdir(const char * _ecv_array dir)
 	{
 		controlMacroScrollOffset = 0;
-		whichList = -1;
+		listLoaded = false;
 		ControlMacrosPageUpdated();
 
 		requestedPath.copy(currentPath.c_str());
@@ -360,7 +406,7 @@ namespace FileManager
 	void FileSet::RequestControlMacrosParentDir()
 	{
 		controlMacroScrollOffset = 0;
-		whichList = -1;
+		listLoaded = false;
 		ControlMacrosPageUpdated();
 
 		size_t end = currentPath.strlen();
@@ -417,7 +463,7 @@ namespace FileManager
 	// Request the parent path
 	void FileSet::RequestParentDir()
 	{
-		whichList = -1;
+		listLoaded = false;
 		FileListUpdated();									// this hides the file list until we receive a new one
 
 		size_t end = currentPath.strlen();
@@ -446,7 +492,7 @@ namespace FileManager
 	// Build a subdirectory of the current path
 	void FileSet::RequestSubdir(const char * _ecv_array dir)
 	{
-		whichList = -1;
+		listLoaded = false;
 		FileListUpdated();									// this hides the file list until we receive a new one
 
 		requestedPath.copy(currentPath.c_str());
@@ -488,7 +534,7 @@ namespace FileManager
 		{
 			cardNumber = cardNum;
 			UI::DisplayFilesPopup(cardNumber, numVolumes);
-			whichList = -1;
+			listLoaded = false;
 			FileListUpdated();								// this hides the file list until we receive a new one
 
 			if (cardNumber == 0)
@@ -523,13 +569,13 @@ namespace FileManager
 	{
 		fileDirectoryName.Clear();
 		errorCode = 0;
-		newFileList = -1;
+		receivingFileList = false;
 	}
 
 	// This is called at the end of a JSON response
 	void EndReceivedMessage()
 	{
-		if (newFileList >= 0)
+		if (receivingFileList)
 		{
 			// We received a new file list, which may be for the files or the macro list. Find out which.
 			size_t i;
@@ -554,11 +600,15 @@ namespace FileManager
 				temp.cat(fileDirectoryName[i++]);
 			}
 
-			fileIndices[newFileList].Sort([](auto a, auto b) -> bool { return StringGreaterThan(a, b); });		// put the index in alphabetical order
+			receiveFileIndex.Sort([](auto a, auto b) -> bool { return StringGreaterThan(a, b); });
 
 			if (card0 && temp.EqualsIgnoreCase("macros"))
 			{
-				macroFilesList.Reload(newFileList, fileDirectoryName, errorCode);
+				if (errorCode == 0)
+				{
+					CopyReceivedList(macroFileList, macroFileIndex);
+				}
+				macroFilesList.Reload(fileDirectoryName, errorCode);
 				if (i + 1 >= fileDirectoryName.strlen())				// if in root of /macros
 				{
 					macroFilesList.ReloadMacroShortList(errorCode);
@@ -566,39 +616,34 @@ namespace FileManager
 			}
 			else if (!UI::IsDisplayingFileInfo())
 			{
-				gcodeFilesList.Reload(newFileList, fileDirectoryName, errorCode);
+				if (errorCode == 0)
+				{
+					CopyReceivedList(jobFileList, jobFileIndex);
+				}
+				gcodeFilesList.Reload(fileDirectoryName, errorCode);
 			}
-			newFileList = -1;
+			receivingFileList = false;
 		}
 	}
 
 	// This is called when we start receiving a list of files
 	void BeginReceivingFiles()
 	{
-		// Find a free file list and index to receive the filenames into
-		newFileList = 0;
-		while (newFileList == gcodeFilesList.GetIndex() || newFileList == macroFilesList.GetIndex())
-		{
-			++newFileList;
-		}
-
-		_ecv_assert(0 <= newFileList && newFileList < 3);
-		fileLists[newFileList].Clear();
-		fileIndices[newFileList].Clear();
+		receiveFileList.Clear();
+		receiveFileIndex.Clear();
+		receivingFileList = true;
 	}
 
 	// This is called for each filename received
 	void ReceiveFile(const char * _ecv_array data)
 	{
-		if (newFileList >= 0)
+		if (receivingFileList)
 		{
-			FileList& fileList = fileLists[newFileList];
-			FileListIndex& fileIndex = fileIndices[newFileList];
-			size_t len = strlen(data) + 1;		// we are going to copy the null terminator as well
-			if (len + fileList.Size() < fileList.Capacity() && fileIndex.Size() < fileIndex.Capacity())
+			const size_t len = strlen(data) + 1;		// we are going to copy the null terminator as well
+			if (len + receiveFileList.Size() < receiveFileList.Capacity() && receiveFileIndex.Size() < receiveFileIndex.Capacity())
 			{
-				fileIndex.Add(fileList.c_ptr() + fileList.Size());
-				fileList.Add(data, len);
+				receiveFileIndex.Add(receiveFileList.c_ptr() + receiveFileList.Size());
+				receiveFileList.Add(data, len);
 			}
 		}
 	}
@@ -612,7 +657,7 @@ namespace FileManager
 	// This is called when we receive an error code
 	void ReceiveErrorCode(int err)
 	{
-		if (newFileList >= 0)
+		if (receivingFileList)
 		{
 			// We have received a file list, so this error code relates to it
 			errorCode = err;
