@@ -234,7 +234,7 @@ struct ControlToolResource
 };
 static ControlToolResource controlToolVisibleResource[ControlToolVisibleColumns];
 static ModernCard *controlToolHeaderCards[ControlToolVisibleColumns] = { nullptr };
-static ModernTextButton *controlToolHeaderButtons[ControlToolVisibleColumns] = { nullptr };	// invisible tap target over each header tile
+static ModernTouchArea *controlToolHeaderButtons[ControlToolVisibleColumns] = { nullptr };	// invisible tap target over each header tile
 static ModernResourceLabel *controlToolNameFields[ControlToolVisibleColumns] = { nullptr };
 static StaticTextField *controlToolCurrentFields[ControlToolVisibleColumns] = { nullptr };
 static ModernTemperatureButton *controlToolActiveButtons[ControlToolVisibleColumns] = { nullptr };
@@ -2996,17 +2996,55 @@ static void HandleControlHeaterOffConfirm()
 	}
 }
 
-// Tapping the T#/BED/CHAMBER header tile itself. Only a Tool resource has a
-// "change tool" action; Bed/Chamber headers are informational only and this
-// is a no-op for them.
+// Tapping the T#/BED/CHAMBER header tile itself. The chamber header is informational only (RRF has no G-code to put a
+// chamber heater into standby, as far as I could find) and this is a no-op for it.
+//  - The tool that is currently selected: just flip its heaters between the active and the standby temperature.
+//    Nothing is parked or deselected, so no tool change is involved.
+//  - Any other tool: ask to change to that tool.
 static void HandleControlToolHeaderTap(unsigned int column)
 {
 	if (column >= ControlToolVisibleColumns) return;
 	const ControlToolResource resource = controlToolVisibleResource[column];
-	if (resource.type == ControlToolResourceType::Tool)
+
+	if (resource.type == ControlToolResourceType::Bed)
 	{
-		OpenControlToolChange(resource.index);
+		// Bed heaters also have an active and a standby state: M144 switches the bed to its standby temperature and
+		// M140 without a temperature switches it back to its active one. Only meaningful while the heater is on.
+		const OM::PrinterStatus printerState = GetStatus();
+		if (printerState == OM::PrinterStatus::printing || printerState == OM::PrinterStatus::simulating)
+		{
+			return;
+		}
+		const OM::HeaterStatus heaterState = GetControlToolHeaterStatus(resource);
+		if (heaterState == OM::HeaterStatus::active)
+		{
+			SerialIo::Sendf("M144 P%d\n", resource.index);
+		}
+		else if (heaterState == OM::HeaterStatus::standby)
+		{
+			SerialIo::Sendf("M140 P%d\n", resource.index);
+		}
+		return;
 	}
+
+	if (resource.type != ControlToolResourceType::Tool) return;
+
+	if (resource.index == currentTool)
+	{
+		const OM::PrinterStatus printerState = GetStatus();
+		if (printerState == OM::PrinterStatus::printing || printerState == OM::PrinterStatus::simulating)
+		{
+			return;			// don't change heater states under a running job
+		}
+		const OM::Tool * const tool = OM::GetTool(resource.index);
+		if (tool != nullptr && GetFirmwareFeatures().IsBitSet(m568TempAndRPM))
+		{
+			// M568 A: 0 = off, 1 = standby, 2 = active. It changes the state of the tool's heaters without selecting or deselecting the tool.
+			SerialIo::Sendf("M568 P%d A%d\n", resource.index, (tool->status == OM::ToolStatus::active) ? 1 : 2);
+		}
+		return;
+	}
+	OpenControlToolChange(resource.index);
 }
 
 static void HandleControlToolPower(unsigned int column)
@@ -3137,7 +3175,7 @@ static void CreateControlToolsTabFields(const ColourScheme& colours)
 		// paint order (added after them here, which the linked-list renderer
 		// draws first/behind, per the AddField-prepends convention used
 		// elsewhere in this function).
-		controlToolHeaderButtons[column] = new ModernTextButton(84, x, w, 114, nullptr, evControlToolsHeaderTap, static_cast<int>(column), DEFAULT_FONT, false);
+		controlToolHeaderButtons[column] = new ModernTouchArea(84, x, w, 114, evControlToolsHeaderTap, static_cast<int>(column));
 		mgr.AddField(controlToolHeaderButtons[column]);
 
 		controlToolActiveText[column].copy("0");

@@ -631,6 +631,30 @@ public:
 	void Refresh(bool full, PixelNumber xOffset, PixelNumber yOffset) override;
 };
 
+// A touch target that draws nothing. Used over tiles that are made of other fields (for example the TOOLS header tile)
+// so that pressing it neither repaints nor erases what is underneath.
+class ModernTouchArea : public SingleButton
+{
+private:
+	PixelNumber height;
+
+protected:
+	PixelNumber GetHeight() const override { return height; }
+
+public:
+	ModernTouchArea(PixelNumber py, PixelNumber px, PixelNumber pw, PixelNumber ph, event_t e, int param)
+		: SingleButton(py, px, pw), height(ph)
+	{
+		SetEvent(e, param);
+	}
+
+	void Refresh(bool full, PixelNumber xOffset, PixelNumber yOffset) override
+	{
+		(void)full; (void)xOffset; (void)yOffset;
+		changed = false;
+	}
+};
+
 // Rail STOP button: a plain rounded-square tile with a fixed safety-red fill and the label STOP.
 class ModernStopButton : public SingleButton
 {
