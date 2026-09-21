@@ -632,7 +632,9 @@ static struct Seq {
 	{ .event = rcvOMKeyDirectories, .seqid = rcvSeqsDirectories, .lastSeq = 0, .state = SeqStateInit, .key = "directories", .flags = "vp" },
 #endif
 #if FETCH_FANS
-	{ .event = rcvOMKeyFans, .seqid = rcvSeqsFans, .lastSeq = 0, .state = SeqStateInit, .key = "fans", .flags = "vp" },
+	// No 'p' here: the panel needs fans[].thermostatic.sensors to tell a tool's part cooling fan from its heat-break fan, and
+	// the 'p' flag may leave it out. The reply is only a little longer and is only requested when the fans change.
+	{ .event = rcvOMKeyFans, .seqid = rcvSeqsFans, .lastSeq = 0, .state = SeqStateInit, .key = "fans", .flags = "v" },
 #endif
 #if FETCH_INPUTS
 	{ .event = rcvOMKeyInputs, .seqid = rcvSeqsInputs, .lastSeq = 0, .state = SeqStateInit, .key = "inputs", .flags = "vp" },
@@ -2515,6 +2517,20 @@ static void ProcessArrayEnd(const char id[], const size_t indices[])
 		else if (strcasecmp(field, "objects^:y^") == 0 && indices[1] == 0)
 		{
 			UI::ClearStatusObjectCoordinate(indices[0], false);
+		}
+	}
+	else if (currentResponseType == rcvOMKeyFans)
+	{
+		// As for the job section, the id is given here unmodified, i.e. it still starts with "result". A fan is
+		// thermostatic if its thermostatic.sensors array is not empty.
+		const char *field = id;
+		if (StringStartsWith(field, "result"))
+		{
+			field += 6;
+		}
+		if (strcasecmp(field, "^:thermostatic:sensors^") == 0)
+		{
+			UI::SetFanThermostatic(indices[0], indices[1] != 0);
 		}
 	}
 	else if (currentResponseType == rcvOMKeyHeat)

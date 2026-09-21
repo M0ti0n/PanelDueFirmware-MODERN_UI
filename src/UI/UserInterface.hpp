@@ -88,6 +88,7 @@ namespace UI
 	extern void UpdateFilamentDiameter(size_t extruder, float value);
 	extern void UpdateFanPercent(size_t fanIndex, int rpm);
 	extern void UpdateFanName(size_t fanIndex, const char *name);
+	extern void SetFanThermostatic(size_t fanIndex, bool thermostatic);
 	extern void UpdateActiveTemperature(size_t index, int ival);
 	extern void UpdateToolTemp(size_t toolIndex, size_t toolHeaterIndex, int32_t temp, bool active);
 	extern void UpdateStandbyTemperature(size_t index, int ival);

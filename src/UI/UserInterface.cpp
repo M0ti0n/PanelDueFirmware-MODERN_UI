@@ -553,6 +553,8 @@ static uint32_t jobStatusDuration = 0;
 static uint32_t jobStatusLastLiveRefresh = 0;
 
 static constexpr unsigned int TuneToolsPerPage = 4;
+static PixelNumber tuneRowLabelX[3] = { 0, 0, 0 }, tuneRowTileX[3] = { 0, 0, 0 };
+static constexpr PixelNumber tuneRowTileW = 110;
 static constexpr unsigned int TuneMaxExtruders = 8;
 static constexpr unsigned int TuneMaxFans = 16;
 static unsigned int tuneToolPage = 0;
@@ -583,6 +585,7 @@ static float tunePressureAdvance[TuneMaxExtruders] = { 0.0f };
 static bool tunePressureAdvanceValid[TuneMaxExtruders] = { false };
 static int tuneFanPercent[TuneMaxFans] = { 0 };
 static bool tuneFanValid[TuneMaxFans] = { false };
+static bool tuneFanThermostatic[TuneMaxFans] = { false };		// fans with thermostatic control (e.g. a heat-break fan)
 static String<16> tuneFanNames[TuneMaxFans];
 static int tuneSpeedPercent = 100;
 
@@ -3988,11 +3991,11 @@ static void CreateControlMovementTabFields(const ColourScheme& colours)
 		const PixelNumber w = ControlW(200);
 		DisplayField::SetDefaultColours(muted, tile);
 		DisplayField::SetDefaultFont(glcd19x21);
-		mgr.AddField(new StaticTextField(97, x + ControlW(16), ControlW(44), TextAlignment::Left, axisLabels[axisSlot]));
+		mgr.AddField(new StaticTextField(98, x + ControlW(16), ControlW(44), TextAlignment::Left, axisLabels[axisSlot]));		// capitals of glcd19x21 are 9.5 px below the top: 98 + 9.5 = card centre
 		controlMovePositionText[axisSlot].copy("---");
 		DisplayField::SetDefaultColours(text, tile);
 		DisplayField::SetDefaultFont(glcd28x32);
-		controlMovePositionFields[axisSlot] = new StaticTextField(97, x + ControlW(55), w - ControlW(69), TextAlignment::Right, controlMovePositionText[axisSlot].c_str());
+		controlMovePositionFields[axisSlot] = new StaticTextField(92, x + ControlW(55), w - ControlW(69), TextAlignment::Right, controlMovePositionText[axisSlot].c_str());		// digits of glcd28x32 are 15.5 px below the top: 92 + 15.5 = card centre
 		mgr.AddField(controlMovePositionFields[axisSlot]);
 		mgr.AddField(new ModernCard(82, x, w, 52, tile, neutralBorder, true));
 	}
@@ -4372,11 +4375,28 @@ static PixelNumber ObjectW(PixelNumber svgW)
 	return (w == 0) ? 1 : w;
 }
 
+// True if a tool uses this fan as one of its own (part cooling) fans
+static bool IsToolFan(unsigned int fan)
+{
+	bool found = false;
+	OM::IterateToolsWhile([&found, fan](OM::Tool*& tool, size_t) {
+		if (tool->fans.IsBitSet(fan))
+		{
+			found = true;
+			return false;
+		}
+		return true;
+	});
+	return found;
+}
+
+// The general (non-tool) fans are recognised by their RRF fan names, not by fan number: FAN_AUX is the auxiliary fan and
+// FAN_CHA the chamber/filter fan. Fans that belong to a tool are never returned. Used by the PRINTING tiles and by TUNE.
 static int FindNamedFan(const char *name)
 {
 	for (unsigned int i = 0; i < TuneMaxFans; ++i)
 	{
-		if (tuneFanValid[i] && strcasecmp(tuneFanNames[i].c_str(), name) == 0)
+		if (tuneFanValid[i] && strcasecmp(tuneFanNames[i].c_str(), name) == 0 && !IsToolFan(i))
 		{
 			return static_cast<int>(i);
 		}
@@ -4394,6 +4414,34 @@ static int GetJobStatusToolExtruder()
 	return (tool != nullptr && !tool->extruders.IsEmpty()) ? static_cast<int>(tool->extruders.LowestSetBit()) : -1;
 }
 
+// The fan that cools the print for a tool: the lowest-numbered fan of the tool that is NOT thermostatically controlled.
+// A tool's fan list can also contain a heat-break fan that is thermostatic and shared with other tools (often fan 0). It
+// must not be treated as the part cooling fan: setting its speed does nothing useful and it is the same fan for every tool
+// that lists it. Falls back to the lowest fan if all of the tool's fans are thermostatic or that is not known yet.
+static int GetToolPartFan(const OM::Tool *tool)
+{
+	if (tool == nullptr || tool->fans.IsEmpty())
+	{
+		return -1;
+	}
+	int lowest = -1;
+	for (unsigned int fan = 0; fan < TuneMaxFans; ++fan)
+	{
+		if (tool->fans.IsBitSet(fan))
+		{
+			if (lowest < 0)
+			{
+				lowest = static_cast<int>(fan);
+			}
+			if (!tuneFanThermostatic[fan])
+			{
+				return static_cast<int>(fan);
+			}
+		}
+	}
+	return lowest;
+}
+
 static int GetJobStatusToolFan()
 {
 	if (currentTool < 0)
@@ -4401,7 +4449,7 @@ static int GetJobStatusToolFan()
 		return -1;
 	}
 	OM::Tool * const tool = OM::GetTool(static_cast<size_t>(currentTool));
-	return (tool != nullptr && !tool->fans.IsEmpty()) ? static_cast<int>(tool->fans.LowestSetBit()) : -1;
+	return GetToolPartFan(tool);
 }
 
 static int GetJobStatusToolHeater()
@@ -4447,14 +4495,7 @@ static const char *JobStatusTileLabel(JobStatusTileType type, String<20>& label)
 	case JobStatusTileType::BedTemp: label.copy("BED"); break;
 	case JobStatusTileType::ChamberTemp: label.copy("CHAMBER"); break;
 	case JobStatusTileType::FanPart:
-		if (currentTool >= 0)
-		{
-			label.printf("FAN T%d", currentTool);
-		}
-		else
-		{
-			label.copy("FAN T#");
-		}
+		label.copy("FAN PART");		// always the part cooling fan of the selected tool, so the tile label does not change with the tool
 		break;
 	case JobStatusTileType::FanAux: label.copy("FAN AUX"); break;
 	case JobStatusTileType::FanCha: label.copy("FAN ->I->"); break;
@@ -5044,38 +5085,9 @@ static void OpenTuneFeedPopup(int toolIndex, int extruder)
 
 static void RefreshTuneGeneralFans()
 {
-	bool toolFan[TuneMaxFans] = { false };
-	OM::IterateToolsWhile([&toolFan](OM::Tool*& tool, size_t) {
-		for (unsigned int fan = 0; fan < TuneMaxFans; ++fan)
-		{
-			if (tool->fans.IsBitSet(fan))
-			{
-				toolFan[fan] = true;
-			}
-		}
-		return true;
-	});
-
-	// General TUNE fans are selected by their RRF fan names, not by fan number.
-	// FAN_AUX is the auxiliary fan and FAN_CHA is the chamber/filter fan.
-	tuneGeneralFanIndices[0] = -1;
-	tuneGeneralFanIndices[1] = -1;
-	for (unsigned int fan = 0; fan < TuneMaxFans; ++fan)
-	{
-		if (!tuneFanValid[fan] || toolFan[fan])
-		{
-			continue;
-		}
-
-		if (strcmp(tuneFanNames[fan].c_str(), "FAN_AUX") == 0)
-		{
-			tuneGeneralFanIndices[0] = (int)fan;
-		}
-		else if (strcmp(tuneFanNames[fan].c_str(), "FAN_CHA") == 0)
-		{
-			tuneGeneralFanIndices[1] = (int)fan;
-		}
-	}
+	// General TUNE fans are selected by their RRF fan names (see FindNamedFan), not by fan number.
+	tuneGeneralFanIndices[0] = FindNamedFan("FAN_AUX");
+	tuneGeneralFanIndices[1] = FindNamedFan("FAN_CHA");
 	for (unsigned int i = 0; i < 2; ++i)
 	{
 		const int fan = tuneGeneralFanIndices[i];
@@ -5132,7 +5144,7 @@ static void RefreshTuneToolRows()
 		tuneToolNumberButtons[row]->SetBorderVisible(toolIndex == currentTool);
 		mgr.Show(tuneToolNumberButtons[row], true);
 
-		const int fan = tool->fans.IsEmpty() ? -1 : (int)tool->fans.LowestSetBit();
+		const int fan = GetToolPartFan(tool);
 		if (fan >= 0 && fan < (int)TuneMaxFans)
 		{
 			tuneToolFanText[row].printf("%d%%", tuneFanPercent[fan]);
@@ -5213,11 +5225,25 @@ static void CreateStatusTuneTabFields(const ColourScheme& colours)
 
 	DisplayField::SetDefaultFont(glcd19x21);
 	DisplayField::SetDefaultColours(muted, pageBg);
-	mgr.AddField(new StaticTextField(87, TuneX(118), TuneW(70), TextAlignment::Left, "SPEED:"));
-	tuneGeneralFanLabels[0] = new StaticTextField(87, TuneX(338), TuneW(78), TextAlignment::Left, "FAN AUX:");
-	tuneGeneralFanLabels[1] = new StaticTextField(87, TuneX(578), TuneW(70), TextAlignment::Left, "FAN CHA:");
-	mgr.AddField(tuneGeneralFanLabels[0]);
-	mgr.AddField(tuneGeneralFanLabels[1]);
+	// Label + tile pairs on the top row. The labels are 21 px high and their capitals are centred on the 46 px tall tiles
+	// (tile top 80): label top = 80 + (46 - 21) / 2 + 1. There are 10 px between each label and its tile; the label widths are the
+	// pixel widths of the texts in glcd19x21 (SPEED: 69, FAN AUX: 93, FAN CHA: 92).
+	{
+		const PixelNumber labelY = 93;
+		const PixelNumber gap = 10;
+		const PixelNumber left = TuneX(118);
+		tuneRowLabelX[0] = left;								// SPEED
+		tuneRowTileX[0] = left + 69 + gap;
+		tuneRowLabelX[1] = tuneRowTileX[0] + tuneRowTileW + 25;	// FAN AUX
+		tuneRowTileX[1] = tuneRowLabelX[1] + 93 + gap;
+		tuneRowLabelX[2] = tuneRowTileX[1] + tuneRowTileW + 25;	// FAN CHA
+		tuneRowTileX[2] = tuneRowLabelX[2] + 92 + gap;
+		mgr.AddField(new StaticTextField(labelY, tuneRowLabelX[0], 70, TextAlignment::Left, "SPEED:"));
+		tuneGeneralFanLabels[0] = new StaticTextField(labelY, tuneRowLabelX[1], 94, TextAlignment::Left, "FAN AUX:");
+		tuneGeneralFanLabels[1] = new StaticTextField(labelY, tuneRowLabelX[2], 93, TextAlignment::Left, "FAN CHA:");
+		mgr.AddField(tuneGeneralFanLabels[0]);
+		mgr.AddField(tuneGeneralFanLabels[1]);
+	}
 	mgr.AddField(new StaticTextField(153, TuneX(118), TuneW(44), TextAlignment::Left, "Tool:"));
 	mgr.AddField(new StaticTextField(153, TuneX(182), TuneW(114), TextAlignment::Left, "Part Cooling:"));
 	mgr.AddField(new StaticTextField(153, TuneX(316), TuneW(114), TextAlignment::Left, "Flow Rate:"));
@@ -5226,15 +5252,15 @@ static void CreateStatusTuneTabFields(const ColourScheme& colours)
 
 	DisplayField::SetDefaultColours(text, tile);
 	tuneSpeedText.copy("100%");
-	tuneSpeedButton = new ModernTextButton(80, TuneX(188), TuneW(130), 46, tuneSpeedText.c_str(), evTuneSpeed, 0, glcd19x21);
+	tuneSpeedButton = new ModernTextButton(80, tuneRowTileX[0], tuneRowTileW, 46, tuneSpeedText.c_str(), evTuneSpeed, 0, glcd19x21);
 	mgr.AddField(tuneSpeedButton);
 
 	for (unsigned int i = 0; i < 2; ++i)
 	{
 		tuneGeneralFanText[i].copy("0%");
 	}
-	tuneGeneralFanButtons[0] = new ModernTextButton(80, TuneX(416), TuneW(130), 46, tuneGeneralFanText[0].c_str(), evTuneGeneralFan, 0, glcd19x21);
-	tuneGeneralFanButtons[1] = new ModernTextButton(80, TuneX(649), TuneW(130), 46, tuneGeneralFanText[1].c_str(), evTuneGeneralFan, 1, glcd19x21);
+	tuneGeneralFanButtons[0] = new ModernTextButton(80, tuneRowTileX[1], tuneRowTileW, 46, tuneGeneralFanText[0].c_str(), evTuneGeneralFan, 0, glcd19x21);
+	tuneGeneralFanButtons[1] = new ModernTextButton(80, tuneRowTileX[2], tuneRowTileW, 46, tuneGeneralFanText[1].c_str(), evTuneGeneralFan, 1, glcd19x21);
 	mgr.AddField(tuneGeneralFanButtons[0]);
 	mgr.AddField(tuneGeneralFanButtons[1]);
 
@@ -5246,7 +5272,7 @@ static void CreateStatusTuneTabFields(const ColourScheme& colours)
 		tuneToolFlowText[row].copy("100%");
 		tuneToolPaText[row].copy("--");
 		tuneToolNumberButtons[row] = new ModernTextButton(y, TuneX(118), TuneW(44), 56, tuneToolNumberText[row].c_str(), evNull, row, glcd19x21);
-		tuneToolNumberButtons[row]->SetBorderColour(colours.popupBorderColour);
+		tuneToolNumberButtons[row]->SetBorderColour(GetModernAccentColour());
 		tuneToolFanButtons[row] = new ModernTextButton(y, TuneX(182), TuneW(114), 56, tuneToolFanText[row].c_str(), evTuneToolFan, row, glcd19x21);
 		tuneToolFlowButtons[row] = new ModernTextButton(y, TuneX(316), TuneW(114), 56, tuneToolFlowText[row].c_str(), evTuneToolFlow, row, glcd19x21);
 		tuneToolPaButtons[row] = new ModernTextButton(y, TuneX(450), TuneW(119), 56, tuneToolPaText[row].c_str(), evTunePressureAdvance, row, glcd19x21);
@@ -6889,7 +6915,32 @@ namespace UI
 				RefreshJobStatusTilesByType(JobStatusTileType::FanAux);
 				RefreshJobStatusTilesByType(JobStatusTileType::FanCha);
 			}
+			else if (currentUiPage == UiPage::StatusTune)
+			{
+				RefreshTuneGeneralFans();
+			}
 		}
+	}
+
+	// Remember which fans are thermostatically controlled. It decides which of a tool's fans is its part cooling fan.
+	void SetFanThermostatic(size_t fanIndex, bool thermostatic)
+	{
+#if DISPLAY_X == 800
+		if (fanIndex < TuneMaxFans && tuneFanThermostatic[fanIndex] != thermostatic)
+		{
+			tuneFanThermostatic[fanIndex] = thermostatic;
+			if (currentUiPage == UiPage::StatusTune)
+			{
+				RefreshTuneToolRows();
+			}
+			else if (currentUiPage == UiPage::StatusJobStatus)
+			{
+				RefreshJobStatusTilesByType(JobStatusTileType::FanPart);
+			}
+		}
+#else
+		UNUSED(fanIndex); UNUSED(thermostatic);
+#endif
 	}
 
 	// Set the number of fans currently exposed by RRF. This clears stale
@@ -6902,6 +6953,7 @@ namespace UI
 		{
 			tuneFanPercent[fan] = 0;
 			tuneFanValid[fan] = false;
+			tuneFanThermostatic[fan] = false;
 			tuneFanNames[fan].Clear();
 		}
 
@@ -6941,7 +6993,7 @@ namespace UI
 			// There might be multiple tools using the same fan and one of them might
 			// be the active one but not necessarily the first one so we need to iterate
 			OM::IterateToolsWhile([&fanIndex, &rpm](OM::Tool*& tool, size_t) {
-				if (tool->index == currentTool && tool->fans.IsBitSet(fanIndex) && tool->fans.LowestSetBit() == fanIndex)
+				if (tool->index == currentTool && tool->fans.IsBitSet(fanIndex) && GetToolPartFan(tool) == static_cast<int>(fanIndex))
 				{
 					UpdateField(fanSpeed, rpm);
 				}
@@ -8312,7 +8364,7 @@ namespace UI
 					{
 						String<24> title;
 						title.printf("FAN T%d", toolIndex);
-						OpenTuneFanPopup(title.c_str(), toolIndex, tool->fans.LowestSetBit());
+						OpenTuneFanPopup(title.c_str(), toolIndex, GetToolPartFan(tool));
 					}
 					currentButton.Clear();
 				}
