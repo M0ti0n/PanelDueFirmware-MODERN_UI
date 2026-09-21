@@ -541,6 +541,13 @@ static constexpr unsigned int JobStatusMaxExtruders = 8;
 static float jobStatusFilamentDiameter[JobStatusMaxExtruders] = { 0.0f };
 static bool jobStatusFilamentDiameterValid[JobStatusMaxExtruders] = { false };
 static float jobStatusRequestedSpeed = 0.0f, jobStatusTopSpeed = 0.0f, jobStatusExtrusionRate = 0.0f;
+// VOL. FLOW is shown as a running average of the extrusion rate with a time constant of about 3 s, because the
+// instantaneous rate jumps around (travel moves, retractions, acceleration).
+static float jobStatusExtrusionRateAvg = 0.0f;
+static uint32_t jobStatusExtrusionRateTime = 0;
+static bool jobStatusExtrusionRateHaveAvg = false;
+static constexpr uint32_t JobStatusFlowAverageMs = 3000;
+static constexpr uint32_t JobStatusFlowStaleMs = 10000;
 static unsigned int jobStatusLayer = 0, jobStatusNumLayers = 0, jobStatusProgress = 0;
 static uint32_t jobStatusDuration = 0;
 static uint32_t jobStatusLastLiveRefresh = 0;
@@ -4495,7 +4502,9 @@ static void RefreshJobStatusTile(unsigned int slot)
 		{
 			const float d = jobStatusFilamentDiameter[index];
 			const float area = 0.7853981634f * d * d;
-			value.printf("%.1f mm3/s", (double)(jobStatusExtrusionRate * area));
+			const bool haveRate = jobStatusExtrusionRateHaveAvg
+				&& (SystemTick::GetTickCount() - jobStatusExtrusionRateTime) <= JobStatusFlowStaleMs;
+			value.printf("%.1f mm3/s", (double)((haveRate ? jobStatusExtrusionRateAvg : 0.0f) * area));
 		}
 		break;
 	}
@@ -6517,6 +6526,15 @@ namespace UI
 	}
 
 	// Return true if polling should be performed
+	bool IsJobStatusPageShown()
+	{
+#if DISPLAY_X == 800
+		return currentUiPage == UiPage::StatusJobStatus;
+#else
+		return false;
+#endif
+	}
+
 	bool IsSetupTab()
 	{
 		return currentTab == tabSystem;			// don't poll while we are on the System (settings) page
@@ -7066,6 +7084,21 @@ namespace UI
 	{
 #if DISPLAY_X == 800
 		jobStatusExtrusionRate = value;
+		const uint32_t now = SystemTick::GetTickCount();
+		const uint32_t elapsed = now - jobStatusExtrusionRateTime;
+		if (!jobStatusExtrusionRateHaveAvg || elapsed > JobStatusFlowStaleMs)
+		{
+			jobStatusExtrusionRateAvg = value;					// start (or restart after a gap) from the first sample
+			jobStatusExtrusionRateHaveAvg = true;
+		}
+		else
+		{
+			// Exponential moving average whose weight depends on the time since the previous sample, so it behaves the
+			// same whether samples arrive every 0.5 s or every 1.5 s.
+			const float alpha = static_cast<float>(elapsed) / (static_cast<float>(elapsed) + static_cast<float>(JobStatusFlowAverageMs));
+			jobStatusExtrusionRateAvg += (value - jobStatusExtrusionRateAvg) * alpha;
+		}
+		jobStatusExtrusionRateTime = now;
 #else
 		UNUSED(value);
 #endif

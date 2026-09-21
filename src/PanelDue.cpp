@@ -249,8 +249,12 @@ enum ReceivedDataEvent
 	rcvOMKeyHeat,
 	rcvOMKeyInputs,
 	rcvOMKeyJob,
+	rcvOMKeyJobBuild,
 	rcvOMKeyLimits,
 	rcvOMKeyMove,
+	rcvOMKeyMoveExtruders,
+	rcvOMKeyLiveJobLayer,
+	rcvOMKeyLiveExtrusionRate,
 	rcvOMKeyNetwork,
 	rcvOMKeyReply,
 	rcvOMKeyScanner,
@@ -314,6 +318,7 @@ enum ReceivedDataEvent
 	rcvMoveAxesVisible,
 	rcvMoveAxesWorkplaceOffsets,
 	rcvMoveCurrentExtrusionRate,
+	rcvMoveCurrentExtrusionRateKeyed,
 	rcvMoveCurrentRequestedSpeed,
 	rcvMoveCurrentTopSpeed,
 	rcvMoveExtrudersFactor,
@@ -346,6 +351,8 @@ enum ReceivedDataEvent
 	rcvSeqsState,
 	rcvSeqsTools,
 	rcvSeqsVolumes,
+	rcvSeqsLiveJobLayer,		// not sequence numbers from RRF: used to schedule the extra live requests below
+	rcvSeqsLiveExtrusionRate,
 
 	// Keys for spindles respons
 	rcvSpindlesActive,
@@ -419,6 +426,16 @@ static FieldTableEntry fieldTable[] =
 	{ rcvHeatHeatersStandby,			"heat:heaters^:standby" },
 	{ rcvHeatHeatersState,				"heat:heaters^:state" },
 
+	// M409 K"job.build" response
+	{ rcvJobBuildNull,					"job.build" },
+	{ rcvJobBuildCurrentObject,			"job.build:currentObject" },
+	{ rcvJobBuildObjectCancelled,		"job.build:objects^:cancelled" },
+	{ rcvJobBuildObjectName,			"job.build:objects^:name" },
+	{ rcvJobBuildObjectXNull,			"job.build:objects^:x" },
+	{ rcvJobBuildObjectX,				"job.build:objects^:x^" },
+	{ rcvJobBuildObjectYNull,			"job.build:objects^:y" },
+	{ rcvJobBuildObjectY,				"job.build:objects^:y^" },
+
 	// M409 K"job" response
 	{ rcvJobBuildNull,					"job:build" },
 	{ rcvJobBuildCurrentObject,			"job:build:currentObject" },
@@ -458,6 +475,13 @@ static FieldTableEntry fieldTable[] =
 	{ rcvMoveExtrudersFilamentDiameter,	"move:extruders^:filamentDiameter" },
 	{ rcvMoveExtrudersPressureAdvance,	"move:extruders^:pressureAdvance" },
 	{ rcvMoveKinematicsName, 			"move:kinematics:name" },
+
+	// M409 K"move.extruders" response and the two single-value live requests (see the seqs table)
+	{ rcvMoveExtrudersFactor, 			"move.extruders^:factor" },
+	{ rcvMoveExtrudersFilamentDiameter,	"move.extruders^:filamentDiameter" },
+	{ rcvMoveExtrudersPressureAdvance,	"move.extruders^:pressureAdvance" },
+	{ rcvJobLayer,						"job.layer" },
+	{ rcvMoveCurrentExtrusionRateKeyed,	"move.currentMove.extrusionRate" },
 	{ rcvMoveSpeedFactor, 				"move:speedFactor" },
 	{ rcvMoveWorkplaceNumber, 			"move:workplaceNumber" },
 
@@ -588,6 +612,12 @@ static struct Seq {
 #endif
 #if FETCH_MOVE
 	{ .event = rcvOMKeyMove, .seqid = rcvSeqsMove, .lastSeq = 0, .state = SeqStateInit, .key = "move", .flags = "vp" },
+	// The extruder fields the modern UI shows (flow factor, pressure advance, filament diameter) are asked for separately
+	// without the 'p' flag, which may make RRF leave them out. Shares the move sequence number.
+	{ .event = rcvOMKeyMoveExtruders, .seqid = rcvSeqsMove, .lastSeq = 0, .state = SeqStateInit, .key = "move.extruders", .flags = "vn" },
+	// Single live values that the PRINTING page shows and that the 'p' flag in the regular live request may drop.
+	// They have no sequence number of their own; PollExtraLiveValues() sets them to SeqStateUpdate every few seconds while printing.
+	{ .event = rcvOMKeyLiveExtrusionRate, .seqid = rcvSeqsLiveExtrusionRate, .lastSeq = 0, .state = SeqStateInit, .key = "move.currentMove.extrusionRate", .flags = "" },
 #endif
 #if FETCH_HEAT
 	{ .event = rcvOMKeyHeat, .seqid = rcvSeqsHeat, .lastSeq = 0, .state = SeqStateInit, .key = "heat", .flags = "vp" },
@@ -609,6 +639,10 @@ static struct Seq {
 #endif
 #if FETCH_JOB
 	{ .event = rcvOMKeyJob, .seqid = rcvSeqsJob, .lastSeq = 0, .state = SeqStateInit, .key = "job", .flags = "vp" },
+	// The 'p' flag makes RRF (3.6 and later) leave out fields that stock PanelDue does not use, and job.build is one of them
+	// as far as I know. So ask for the build objects separately, without 'p'. It shares the job sequence number.
+	{ .event = rcvOMKeyJobBuild, .seqid = rcvSeqsJob, .lastSeq = 0, .state = SeqStateInit, .key = "job.build", .flags = "vn" },
+	{ .event = rcvOMKeyLiveJobLayer, .seqid = rcvSeqsLiveJobLayer, .lastSeq = 0, .state = SeqStateInit, .key = "job.layer", .flags = "" },
 #endif
 #if FETCH_SENSORS
 	{ .event = rcvOMKeySensors, .seqid = rcvSeqsSensors, .lastSeq = 0, .state = SeqStateInit, .key = "sensors", .flags = "vp" },
@@ -620,6 +654,8 @@ static struct Seq {
 	{ .event = rcvOMKeyVolumes, .seqid = rcvSeqsVolumes, .lastSeq = 0, .state = SeqStateInit, .key = "volumes", .flags = "vp" },
 #endif
 };
+
+static uint32_t lastRegularExtrusionSample = 0;		// time the regular live request last delivered move.currentMove.extrusionRate
 
 static struct Seq *currentReqSeq = nullptr;
 static struct Seq *currentRespSeq = nullptr;
@@ -679,6 +715,38 @@ static void UpdateSeq(const ReceivedDataEvent seqid, int32_t val)
 				seqs[i].lastSeq = val;
 				seqs[i].state = SeqStateUpdate;
 			}
+		}
+	}
+}
+
+// Ask again for the single live values below while a job is running (see the seqs table), and only while the PRINTING
+// page is showing because nothing else displays them. The extrusion rate is skipped whenever the regular live
+// request has delivered it recently.
+static uint32_t lastLayerPoll = 0, lastExtrusionPoll = 0;
+static const uint32_t layerPollInterval = 3000, extrusionPollInterval = 1500, regularSampleFreshTime = 2000;
+
+static void PollExtraLiveValues(uint32_t now)
+{
+	if (!UI::IsJobStatusPageShown())
+	{
+		return;
+	}
+	for (size_t i = 0; i < ARRAY_SIZE(seqs); ++i)
+	{
+		if (seqs[i].state != SeqStateOk)
+		{
+			continue;
+		}
+		if (seqs[i].seqid == rcvSeqsLiveJobLayer && now - lastLayerPoll >= layerPollInterval)
+		{
+			seqs[i].state = SeqStateUpdate;
+			lastLayerPoll = now;
+		}
+		else if (seqs[i].seqid == rcvSeqsLiveExtrusionRate && now - lastExtrusionPoll >= extrusionPollInterval
+				 && now - lastRegularExtrusionSample >= regularSampleFreshTime)
+		{
+			seqs[i].state = SeqStateUpdate;
+			lastExtrusionPoll = now;
 		}
 	}
 }
@@ -1684,6 +1752,9 @@ static void ProcessReceivedValue(StringRef id, const char data[], const size_t i
 		break;
 
 	case rcvMoveCurrentExtrusionRate:
+		lastRegularExtrusionSample = SystemTick::GetTickCount();		// the regular live request does deliver it, so the extra request is not needed
+		// fall through
+	case rcvMoveCurrentExtrusionRateKeyed:
 		{
 			float value;
 			UI::UpdateCurrentMoveExtrusionRate(GetFloat(data, value) ? value : 0.0f);
@@ -2410,17 +2481,38 @@ static void ProcessArrayEnd(const char id[], const size_t indices[])
 	{
 		FileManager::BeginReceivingFiles();				// received an empty file list - need to tell the file manager about it
 	}
-	else if (currentResponseType == rcvOMKeyJob)
+	else if (currentResponseType == rcvOMKeyJob || currentResponseType == rcvOMKeyJobBuild)
 	{
-		if (strcasecmp(id, "job:build:objects^") == 0)
+		// Unlike ProcessReceivedValue(), this function is given the id exactly as parsed, i.e. still starting with
+		// "result:" and not rewritten to the request key. Comparing it with "job:build:objects^" never matched, so the
+		// number of build objects was never reported and the OBJECT page stayed empty. Strip the prefix instead.
+		const char *field = id;
+		if (StringStartsWith(field, "result:"))
+		{
+			field += 7;
+		}
+		else if (StringStartsWith(field, "job.build:"))
+		{
+			field += 10;
+		}
+		else if (StringStartsWith(field, "job:"))
+		{
+			field += 4;
+		}
+		if (currentResponseType == rcvOMKeyJob)
+		{
+			field = StringStartsWith(field, "build:") ? field + 6 : "";		// K"job": the objects are below "build"
+		}
+
+		if (strcasecmp(field, "objects^") == 0)
 		{
 			UI::UpdateStatusObjectCount(indices[0]);
 		}
-		else if (strcasecmp(id, "job:build:objects^:x^") == 0 && indices[1] == 0)
+		else if (strcasecmp(field, "objects^:x^") == 0 && indices[1] == 0)
 		{
 			UI::ClearStatusObjectCoordinate(indices[0], true);
 		}
-		else if (strcasecmp(id, "job:build:objects^:y^") == 0 && indices[1] == 0)
+		else if (strcasecmp(field, "objects^:y^") == 0 && indices[1] == 0)
 		{
 			UI::ClearStatusObjectCoordinate(indices[0], false);
 		}
@@ -2921,6 +3013,10 @@ int main(void)
 				}
 				else
 				{
+					if (PrintInProgress())
+					{
+						PollExtraLiveValues(now);
+					}
 					currentReqSeq = GetNextSeq(currentReqSeq);
 					if (currentReqSeq != nullptr)
 					{
