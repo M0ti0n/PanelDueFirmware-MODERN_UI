@@ -5244,10 +5244,14 @@ static void CreateStatusTuneTabFields(const ColourScheme& colours)
 		mgr.AddField(tuneGeneralFanLabels[0]);
 		mgr.AddField(tuneGeneralFanLabels[1]);
 	}
-	mgr.AddField(new StaticTextField(153, TuneX(118), TuneW(44), TextAlignment::Left, "Tool:"));
-	mgr.AddField(new StaticTextField(153, TuneX(182), TuneW(114), TextAlignment::Left, "Part Cooling:"));
+	// Column headers above the tool rows. Text widths in glcd19x21: Tool: 44, Part Cooling: 122, Flow Rate: 103, Press. Adv.: 113.
+	// A text is clipped at the right edge of its field, so each field is at least as wide as its text (the old fields for
+	// "Tool:", "Part Cooling:" and "Pressure Adv.:" were 43, 112 and 117 px wide). "Pressure Adv.:" (140 px) would run into the
+	// Z Offset header, so it is shortened to fit its column.
+	mgr.AddField(new StaticTextField(153, TuneX(118), 46, TextAlignment::Left, "Tool:"));
+	mgr.AddField(new StaticTextField(153, TuneX(182), 124, TextAlignment::Left, "Part Cooling:"));
 	mgr.AddField(new StaticTextField(153, TuneX(316), TuneW(114), TextAlignment::Left, "Flow Rate:"));
-	mgr.AddField(new StaticTextField(153, TuneX(450), TuneW(119), TextAlignment::Left, "Pressure Adv.:"));
+	mgr.AddField(new StaticTextField(153, TuneX(450), TuneW(119), TextAlignment::Left, "Press. Adv.:"));
 	mgr.AddField(new StaticTextField(153, TuneX(589), TuneW(99), TextAlignment::Left, "Z Offset:"));
 
 	DisplayField::SetDefaultColours(text, tile);
