@@ -4414,32 +4414,52 @@ static int GetJobStatusToolExtruder()
 	return (tool != nullptr && !tool->extruders.IsEmpty()) ? static_cast<int>(tool->extruders.LowestSetBit()) : -1;
 }
 
-// The fan that cools the print for a tool: the lowest-numbered fan of the tool that is NOT thermostatically controlled.
-// A tool's fan list can also contain a heat-break fan that is thermostatic and shared with other tools (often fan 0). It
-// must not be treated as the part cooling fan: setting its speed does nothing useful and it is the same fan for every tool
-// that lists it. Falls back to the lowest fan if all of the tool's fans are thermostatic or that is not known yet.
+// The fan that cools the print for a tool. A tool's fan list can also contain a heat-break fan, which is thermostatic and often
+// shared by several tools (e.g. tools with F0:1 and F0:2, where fan 0 is the shared heat-break fan). That fan must not be used as the
+// part cooling fan: it is the same fan for every tool that lists it, and setting its speed does nothing useful.
+// Preference order: a fan that is not thermostatic and is used by no other tool; then any fan that is not thermostatic; then
+// simply the lowest fan. The "not shared" rule keeps this working even if the thermostatic information has not arrived.
 static int GetToolPartFan(const OM::Tool *tool)
 {
 	if (tool == nullptr || tool->fans.IsEmpty())
 	{
 		return -1;
 	}
-	int lowest = -1;
+
+	int lowest = -1, firstNotThermostatic = -1;
 	for (unsigned int fan = 0; fan < TuneMaxFans; ++fan)
 	{
-		if (tool->fans.IsBitSet(fan))
+		if (!tool->fans.IsBitSet(fan))
 		{
-			if (lowest < 0)
+			continue;
+		}
+		if (lowest < 0)
+		{
+			lowest = static_cast<int>(fan);
+		}
+		if (tuneFanThermostatic[fan])
+		{
+			continue;
+		}
+		if (firstNotThermostatic < 0)
+		{
+			firstNotThermostatic = static_cast<int>(fan);
+		}
+		bool sharedWithOtherTool = false;
+		OM::IterateToolsWhile([&sharedWithOtherTool, tool, fan](OM::Tool*& other, size_t) {
+			if (other != tool && other->fans.IsBitSet(fan))
 			{
-				lowest = static_cast<int>(fan);
+				sharedWithOtherTool = true;
+				return false;
 			}
-			if (!tuneFanThermostatic[fan])
-			{
-				return static_cast<int>(fan);
-			}
+			return true;
+		});
+		if (!sharedWithOtherTool)
+		{
+			return static_cast<int>(fan);
 		}
 	}
-	return lowest;
+	return (firstNotThermostatic >= 0) ? firstNotThermostatic : lowest;
 }
 
 static int GetJobStatusToolFan()
@@ -8367,8 +8387,9 @@ namespace UI
 					if (tool != nullptr && !tool->fans.IsEmpty())
 					{
 						String<24> title;
-						title.printf("FAN T%d", toolIndex);
-						OpenTuneFanPopup(title.c_str(), toolIndex, GetToolPartFan(tool));
+						const int partFan = GetToolPartFan(tool);
+						title.printf("FAN T%d (P%d)", toolIndex, partFan);		// P<n> is the RRF fan number that M106 will address
+						OpenTuneFanPopup(title.c_str(), toolIndex, partFan);
 					}
 					currentButton.Clear();
 				}
