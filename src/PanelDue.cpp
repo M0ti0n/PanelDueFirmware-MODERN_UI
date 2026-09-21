@@ -281,6 +281,7 @@ enum ReceivedDataEvent
 	rcvHeatHeatersState,
 
 	// Keys for job response
+	rcvJobBuildNull,
 	rcvJobBuildCurrentObject,
 	rcvJobBuildObjectCancelled,
 	rcvJobBuildObjectName,
@@ -419,6 +420,7 @@ static FieldTableEntry fieldTable[] =
 	{ rcvHeatHeatersState,				"heat:heaters^:state" },
 
 	// M409 K"job" response
+	{ rcvJobBuildNull,					"job:build" },
 	{ rcvJobBuildCurrentObject,			"job:build:currentObject" },
 	{ rcvJobBuildObjectCancelled,		"job:build:objects^:cancelled" },
 	{ rcvJobBuildObjectName,			"job:build:objects^:name" },
@@ -891,6 +893,13 @@ void SetBaudRate(uint32_t rate)
 {
 	nvData.SetBaudRate(rate);
 	SerialIo::SetBaudRate(rate);
+}
+
+// Make the display dim on the next pass of the main loop, as if the idle timeout had already elapsed.
+// Used to give immediate feedback when "Always dim" is switched on; the next touch restores the normal brightness.
+void DimDisplayNow()
+{
+	lastActionTime = SystemTick::GetTickCount() - DimDisplayTimeout;
 }
 
 void SetBrightness(int percent)
@@ -1426,6 +1435,12 @@ static void ProcessReceivedValue(StringRef id, const char data[], const size_t i
 		break;
 
 	// Job section
+	case rcvJobBuildNull:
+		// RRF reports "build": null when the job has no build objects, e.g. after a job without labelled objects
+		// replaces one that had them. Forget the old object list so the OBJECT page doesn't show stale objects.
+		UI::UpdateStatusObjectCount(0);
+		break;
+
 	case rcvJobBuildCurrentObject:
 		{
 			int32_t objectIndex;

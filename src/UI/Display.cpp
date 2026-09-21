@@ -975,7 +975,7 @@ void ModernStopButton::Refresh(bool full, PixelNumber xOffset, PixelNumber yOffs
 		return;
 	}
 
-	const Colour railBg = UTFT::fromRGB(42, 50, 64);       // #2a3240, same as the rail card behind it
+	const Colour railBg = UTFT::fromRGB(18, 22, 28);       // #12161c, same as the rail card behind it
 	const Colour stopRed = pressed ? UTFT::fromRGB(160, 39, 35) : UTFT::fromRGB(201, 50, 24); // #C93218 fixed safety red
 	const Colour glyph = UTFT::fromRGB(245, 245, 245);
 	const PixelNumber left = x + xOffset;
@@ -1111,11 +1111,33 @@ void ModernMasterNavButton::Refresh(bool full, PixelNumber xOffset, PixelNumber 
 		}
 		break;
 
-	case MasterNavIcon::Gear:
+	case MasterNavIcon::Gear:		// (kept as the enumerator name; the SYSTEM tile now shows an open-end spanner)
 	default:
-		// Body, eight radial teeth, and a hole punched back to the fill
-		// colour. Scaled up slightly for the larger 76px rail tile, with
-		// rounded teeth for a less blocky silhouette than plain squares.
+#if DISPLAY_X == 800
+		// Open-end spanner for the 76x76 rail tile, built from the same primitives as the other icons:
+		// a round head, a concave neck, a rounded handle and an open jaw cut back out in the tile colour.
+		// Vertical layout, icon spans 60 px from tile row 8 to row 68, centred on the tile.
+		{
+			const int iconTop = static_cast<int>(top) + 8;
+			const int headRadius = 13;
+			const int headY = iconTop + headRadius;				// centre of the head
+			const int neckTop = headY + 6;						// the neck starts where the head is still full width...
+			const int neckBottom = headY + 19;					// ...and has narrowed to the handle width here
+			const int neckRows = neckBottom - neckTop;
+
+			lcd.fillCircle(cx, headY, headRadius);
+			for (int yy = neckTop; yy <= neckBottom; ++yy)
+			{
+				const int remaining = neckRows - (yy - neckTop);
+				const int halfWidth = 6 + (6 * remaining * remaining + (neckRows * neckRows) / 2) / (neckRows * neckRows);
+				lcd.fillRect(cx - halfWidth, yy, cx + halfWidth, yy);
+			}
+			lcd.fillRoundRect(cx - 6, neckBottom, cx + 6, static_cast<int>(top) + 68);
+			lcd.setColor(fill);
+			lcd.fillRect(cx - 4, iconTop, cx + 4, headY + 1);	// open jaw
+		}
+#else
+		// Body, eight radial teeth, and a hole punched back to the fill colour (compact displays).
 		lcd.fillCircle(cx, cy, 14);
 		{
 			static const int dx[8] = { 0, 13, 18, 13, 0, -13, -18, -13 };
@@ -1127,6 +1149,7 @@ void ModernMasterNavButton::Refresh(bool full, PixelNumber xOffset, PixelNumber 
 		}
 		lcd.setColor(fill);
 		lcd.fillCircle(cx, cy, 6);
+#endif
 		break;
 	}
 
@@ -1191,6 +1214,32 @@ void ModernIconButton::Refresh(bool full, PixelNumber xOffset, PixelNumber yOffs
 				lcd.drawLine(cx - shortArm, cy + o, cx - shortArm / 3, cy + r + o);
 				lcd.drawLine(cx - shortArm / 3, cy + r + o, cx + r, cy - r + o);
 			}
+		}
+		changed = false;
+		return;
+	}
+	// Trash can: vector-drawn like Cancel/OK (the legacy bitmap is small and off-style in a 110x78 tile).
+	// Handle, lid and a slightly tapering body, with three slots cut back out in the button colour.
+	if (icon == IconTrash)
+	{
+		const int cx = static_cast<int>(left + width / 2);
+		const int cy = static_cast<int>(top + height / 2) + 1;
+		lcd.setColor(fcolour);
+		lcd.fillRect(cx - 8, cy - 24, cx + 8, cy - 20);					// handle
+		lcd.fillRoundRect(cx - 22, cy - 19, cx + 22, cy - 12);			// lid
+		for (int i = 0; i < 34; ++i)									// body, 37 px wide at the top narrowing to 29
+		{
+			int halfWidth = 18 - (i * 4) / 33;
+			if (i >= 32)
+			{
+				--halfWidth;											// soften the bottom corners
+			}
+			lcd.fillRect(cx - halfWidth, cy - 10 + i, cx + halfWidth, cy - 10 + i);
+		}
+		lcd.setColor(pressed ? pressedBackColour : bcolour);
+		for (int k = -1; k <= 1; ++k)									// three slots
+		{
+			lcd.fillRect(cx + k * 9 - 2, cy - 4, cx + k * 9 + 2, cy + 17);
 		}
 		changed = false;
 		return;
@@ -1383,6 +1432,14 @@ void ModernCard::Refresh(bool full, PixelNumber xOffset, PixelNumber yOffset)
 	const PixelNumber right = left + width - 1;
 	const PixelNumber bottom = top + height - 1;
 	lcd.setColor(bcolour);
+	if (height <= 5)
+	{
+		// UTFT::fillRoundRect() draws nothing when the rectangle is 5 pixels high or less, which made the 3 px
+		// accent line under the top tabs invisible. Thin cards are plain bars anyway.
+		lcd.fillRect(left, top, right, bottom);
+		changed = false;
+		return;
+	}
 	lcd.fillRoundRect(left, top, right, bottom);
 	if (borderVisible)
 	{
@@ -1409,9 +1466,17 @@ PixelNumber ButtonBase::iconMargin = 1;
 void ButtonBase::DrawOutline(PixelNumber xOffset, PixelNumber yOffset, bool isPressed) const
 {
 	lcd.setColor((isPressed) ? pressedBackColour : bcolour);
+#if DISPLAY_X == 800
+	// The modern UI uses flat, single-colour fills. The 'gradient' argument is not a target colour but an increment that
+	// UTFT::applyGradient() adds to the fill colour every buttonGradStep rows, so passing the tile colour here produced a
+	// stepped fill (three bands on a 36 px key). A zero increment keeps the whole button one colour.
+	const Colour grad = 0;
+#else
+	const Colour grad = (isPressed) ? pressedGradColour : gradColour;
+#endif
 	// Note that we draw the filled rounded rectangle with the full width but 2 pixels less height than the border.
 	// This means that we start with the requested colour inside the border.
-	lcd.fillRoundRect(x + xOffset, y + yOffset + 1, x + xOffset + width - 1, y + yOffset + GetHeight() - 2, (isPressed) ? pressedGradColour : gradColour, buttonGradStep);
+	lcd.fillRoundRect(x + xOffset, y + yOffset + 1, x + xOffset + width - 1, y + yOffset + GetHeight() - 2, grad, buttonGradStep);
 	lcd.setColor(borderColour);
 	lcd.drawRoundRect(x + xOffset, y + yOffset, x + xOffset + width - 1, y + yOffset + GetHeight() - 1);
 }

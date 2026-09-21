@@ -186,7 +186,14 @@ const unsigned int NumDisplayedMacros = NumMacroColumns * NumMacroRows;
 const PixelNumber MacroListPopupWidth = fullPopupWidth;
 const PixelNumber MacroListPopupHeight = ((NumMacroRows + 1) * buttonHeight) + (NumMacroRows * fileButtonRowSpacing) + (2 * popupTopMargin);
 
+#if DISPLAY_X == 800
+// On the modern 800x480 UI the console rows are laid out first and then moved down by the 56 px top-tab row
+// (RelayoutLegacyFields), so that offset has to be taken off the available height: (480 - 56 - 52 - 4)/32 = 11 rows.
+// (Using the full height gave 12 rows and the last one was cut off by the bottom edge of the screen.)
+const unsigned int numMessageRows = (DisplayY - 56 - firstMessageRow - margin)/rowTextHeight;
+#else
 const unsigned int numMessageRows = (rowTabs - margin - rowHeight)/rowTextHeight;
+#endif
 const PixelNumber messageTextX = margin + messageTimeWidth + 2;
 const PixelNumber messageTextWidth = DisplayX - margin - messageTextX;
 

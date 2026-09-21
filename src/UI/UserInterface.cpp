@@ -234,6 +234,7 @@ struct ControlToolResource
 };
 static ControlToolResource controlToolVisibleResource[ControlToolVisibleColumns];
 static ModernCard *controlToolHeaderCards[ControlToolVisibleColumns] = { nullptr };
+static ModernTextButton *controlToolHeaderButtons[ControlToolVisibleColumns] = { nullptr };	// invisible tap target over each header tile
 static ModernResourceLabel *controlToolNameFields[ControlToolVisibleColumns] = { nullptr };
 static StaticTextField *controlToolCurrentFields[ControlToolVisibleColumns] = { nullptr };
 static ModernTemperatureButton *controlToolActiveButtons[ControlToolVisibleColumns] = { nullptr };
@@ -755,11 +756,11 @@ static Colour GetModernAccentColourByIndex(uint8_t index)
 {
 	switch (index % 8)
 	{
-	case 0: return UTFT::fromRGB(251, 118, 4);   // 1 Orange Fire
+	case 0: return UTFT::fromRGB(238, 112, 4);   // 1 Orange Fire  #EE7004
 	case 1: return UTFT::fromRGB(255, 0, 0);     // 2 Red Voron
 	case 2: return UTFT::fromRGB(0, 124, 247);   // 3 Duet Blue
 	case 3: return UTFT::fromRGB(0, 255, 255);   // 4 Cyan
-	case 4: return UTFT::fromRGB(101, 184, 73);  // 5 RepRap Green
+	case 4: return UTFT::fromRGB(80, 150, 56);   // 5 RepRap Green  #509638
 	case 5: return UTFT::fromRGB(252, 209, 10);  // 6 Yellow / Gold
 	case 6: return UTFT::fromRGB(103, 255, 0);   // 7 Lime
 	default:return UTFT::fromRGB(255, 0, 255);   // 8 Magenta
@@ -798,6 +799,59 @@ static void AddTopTabBackground()
 	const Colour tile = UTFT::fromRGB(28, 34, 43);            // #1c222b
 	mgr.AddField(new ModernCard(0, topTabRowLeft, topTabRowWidth, topTabHeight, tile, tile, false));
 }
+
+#if DISPLAY_X == 800
+// Top (sub) tabs. Every modern page owns its own set of tab buttons, so their "selected" look cannot be left to the
+// touch/release handling: a button pressed on one page stays pressed there and shows up highlighted (wrongly) when that
+// page is displayed again, while the tab of the page you just switched to was never pressed at all.
+// Instead, work out which tab belongs to the page being displayed and press exactly that one.
+static bool IsTopTabEvent(Event e)
+{
+	return e == evControlTools || e == evControlMovement || e == evControlExtrusion || e == evControlMacros
+		|| e == evStatusJobStatus || e == evStatusTune || e == evStatusJob || e == evStatusObjects
+		|| e == evSystemConsole || e == evSystemSettings;
+}
+
+static Event GetTopTabEventForPage(UiPage page)
+{
+	switch (page)
+	{
+	case UiPage::ControlTools:		return evControlTools;
+	case UiPage::ControlMovement:	return evControlMovement;
+	case UiPage::ControlExtrusion:	return evControlExtrusion;
+	case UiPage::ControlMacros:		return evControlMacros;
+	case UiPage::StatusJobStatus:	return evStatusJobStatus;
+	case UiPage::StatusTune:		return evStatusTune;
+	case UiPage::StatusJob:			return evStatusJob;
+	case UiPage::StatusObjects:		return evStatusObjects;
+	case UiPage::SystemConsole:		return evSystemConsole;
+	case UiPage::SystemSettings:	return evSystemSettings;
+	default:						return evNull;
+	}
+}
+
+// Highlight the top tab of the current page and release all the other top tabs in the displayed root.
+static void SyncTopTabHighlight()
+{
+	const Event selected = GetTopTabEventForPage(currentUiPage);
+	if (selected == evNull)
+	{
+		return;
+	}
+	for (DisplayField *f = mgr.GetRoot(); f != nullptr; f = f->next)
+	{
+		if (f->IsButton())
+		{
+			ButtonBase * const b = static_cast<ButtonBase*>(f);
+			const Event e = static_cast<Event>(b->GetEvent());
+			if (IsTopTabEvent(e))
+			{
+				b->Press(e == selected, 0);
+			}
+		}
+	}
+}
+#endif
 
 static ButtonBase * null currentTab = nullptr;
 
@@ -2343,7 +2397,7 @@ static void CreateCommonFields(const ColourScheme& colours)
 	DisplayField::SetDefaultColours(colours.buttonTextColour, colours.buttonTextBackColour, colours.buttonBorderColour, colours.buttonGradColour,
 									colours.buttonPressedBackColour, colours.buttonPressedGradColour, colours.pal);
 	const Colour pageBg = UTFT::fromRGB(18, 22, 28);      // #12161c
-	const Colour railBg = UTFT::fromRGB(42, 50, 64);       // #2a3240, permanent left rail fill
+	const Colour railBg = UTFT::fromRGB(18, 22, 28);       // #12161c, same as the page background so unselected rail tiles blend into it
 	const Colour tile = UTFT::fromRGB(28, 34, 43);         // #1c222b
 	const Colour text = UTFT::fromRGB(229, 232, 236);      // #e5e8ec
 	const Colour accent = GetModernAccentColour();
@@ -2553,6 +2607,17 @@ static void RefreshControlToolsPage()
 		ControlToolResource resource;
 		const bool visible = columnAllowed && resourcePos < resourceCount && GetControlToolResource(resourcePos, resource);
 		controlToolVisibleResource[column] = visible ? resource : ControlToolResource{};
+		// The header's tap target must follow the column: left visible in an unused column it draws an empty tile
+		// (its own fill) and reacts to touch. Show it first so that, when a column appears, the tile, name and
+		// temperature are painted on top of it.
+		if (controlToolHeaderButtons[column] != nullptr)
+		{
+			if (!visible)
+			{
+				controlToolHeaderButtons[column]->Press(false, 0);
+			}
+			mgr.Show(controlToolHeaderButtons[column], visible);
+		}
 		mgr.Show(controlToolHeaderCards[column], visible);
 		mgr.Show(controlToolNameFields[column], visible);
 		mgr.Show(controlToolCurrentFields[column], visible);
@@ -2878,18 +2943,56 @@ static void OpenControlHeaterOff(const ControlToolResource& resource)
 static void HandleControlHeaterOffConfirm()
 {
 	const ControlToolResource resource = controlHeaterOffResource;
+	// Every variant sets BOTH the active (S) and the standby (R) temperature to 0, so the heater cannot heat up
+	// again when the tool/bed/chamber later changes between its active and standby states.
 	if (resource.type == ControlToolResourceType::Tool)
 	{
+		// Tool heaters are switched off through the tool (M568/G10 P<tool>), which works whether or not that tool is
+		// the selected one: S0 covers the active state and R0 the standby state. A tool with several heaters gets
+		// one 0 per heater (0:0:...) so that every one of its heaters is switched off, not just the first.
 		const bool useM568 = GetFirmwareFeatures().IsBitSet(m568TempAndRPM);
-		SerialIo::Sendf("%s P%d S0\n", useM568 ? "M568" : "G10", resource.index);
+		String<2 * MaxHeatersPerTool> zeros;
+		const OM::Tool * const tool = OM::GetTool(resource.index);
+		size_t numHeaters = 0;
+		if (tool != nullptr)
+		{
+			while (numHeaters < MaxHeatersPerTool && tool->heaters[numHeaters] != nullptr)
+			{
+				++numHeaters;
+			}
+		}
+		zeros.copy("0");
+		for (size_t i = 1; i < numHeaters; ++i)
+		{
+			zeros.cat(":0");
+		}
+		SerialIo::Sendf("%s P%d S%s R%s\n", useM568 ? "M568" : "G10", resource.index, zeros.c_str(), zeros.c_str());
 	}
 	else if (resource.type == ControlToolResourceType::Bed)
 	{
-		SerialIo::Sendf("M144 P%d\n", resource.index);
+		// Address the heater directly with H, together with the bed index P so the command can never be taken
+		// for bed 0. The heater number comes from RRF's own object model, so this does not remap anything.
+		const OM::Bed * const bed = OM::GetBed(resource.index);
+		if (bed != nullptr && bed->heater >= 0)
+		{
+			SerialIo::Sendf("M140 P%d H%d S0 R0\n", resource.index, static_cast<int>(bed->heater));
+		}
+		else
+		{
+			SerialIo::Sendf("M140 P%d S0 R0\n", resource.index);
+		}
 	}
 	else if (resource.type == ControlToolResourceType::Chamber)
 	{
-		SerialIo::Sendf("M141 P%d S-274\n", resource.index);
+		const OM::Chamber * const chamber = OM::GetChamber(resource.index);
+		if (chamber != nullptr && chamber->heater >= 0)
+		{
+			SerialIo::Sendf("M141 P%d H%d S0 R0\n", resource.index, static_cast<int>(chamber->heater));
+		}
+		else
+		{
+			SerialIo::Sendf("M141 P%d S0 R0\n", resource.index);
+		}
 	}
 }
 
@@ -2945,7 +3048,7 @@ static void CreateControlToolsPopups(const ColourScheme& colours)
 	const Colour neutralBorder = UTFT::fromRGB(59, 67, 79);
 	const Colour accent = GetModernAccentColour();
 	const Colour cancelRed = UTFT::fromRGB(201, 50, 24);
-	const Colour confirmGreen = UTFT::fromRGB(191, 226, 62);
+	const Colour confirmGreen = UTFT::fromRGB(86, 184, 52);   // check mark fill #56B834
 
 	// Shared modern numeric keypad. Every tile (digits, ./-, backspace,
 	// cancel, confirm) is now 110x78 -- the same size as the standard
@@ -2957,9 +3060,9 @@ static void CreateControlToolsPopups(const ColourScheme& colours)
 	controlTempNumpadPopup = new PopupWindow(460, 660, pageBg, pageBg);
 	DisplayField::SetDefaultFont(glcd28x32);
 	DisplayField::SetDefaultColours(text, tile);
-	controlTempNumpadValueField = new StaticTextField(44, 141, 185, TextAlignment::Left, "0");
+	controlTempNumpadValueField = new StaticTextField(39, 141, 185, TextAlignment::Left, "0");
 	controlTempNumpadPopup->AddField(controlTempNumpadValueField);
-	controlTempNumpadUnitField = new StaticTextField(44, 350, 40, TextAlignment::Right, DEGREE_SYMBOL "C");
+	controlTempNumpadUnitField = new StaticTextField(39, 350, 40, TextAlignment::Right, DEGREE_SYMBOL "C");
 	controlTempNumpadPopup->AddField(controlTempNumpadUnitField);
 	controlTempNumpadPopup->AddField(new ModernCard(29, 125, 280, 52, tile, neutralBorder, true));
 	controlTempNumpadResourceField = new ModernTextButton(29, 415, 120, 52, "T0", evNull, 0, glcd28x32);
@@ -3034,7 +3137,8 @@ static void CreateControlToolsTabFields(const ColourScheme& colours)
 		// paint order (added after them here, which the linked-list renderer
 		// draws first/behind, per the AddField-prepends convention used
 		// elsewhere in this function).
-		mgr.AddField(new ModernTextButton(84, x, w, 114, nullptr, evControlToolsHeaderTap, static_cast<int>(column), DEFAULT_FONT, false));
+		controlToolHeaderButtons[column] = new ModernTextButton(84, x, w, 114, nullptr, evControlToolsHeaderTap, static_cast<int>(column), DEFAULT_FONT, false);
+		mgr.AddField(controlToolHeaderButtons[column]);
 
 		controlToolActiveText[column].copy("0");
 		controlToolStandbyText[column].copy("0");
@@ -4474,6 +4578,37 @@ static void JobStatusThumbnailRefreshNotify(bool full, bool changed)
 	SerialIo::Sendf(GetFirmwareFeatures().IsBitSet(noM20M36) ? "M408 S36 P\"%s\"\n" : "M36 \"%s\"\n", printingFile.c_str());
 }
 
+// RRF only cancels a job that is paused (sending M0 to a running print just produces an error saying that the print
+// must be paused first). So when ABORT is confirmed while the job is running, pause it first (M25) and send the
+// cancel (M0) as soon as the printer reports that it is paused. Give up if that takes too long.
+static bool jobAbortWhenPaused = false;
+static uint32_t jobAbortRequestedAt = 0;
+static constexpr uint32_t JobAbortPauseTimeoutMs = 60000;
+
+static void RequestJobAbort()
+{
+	switch (GetStatus())
+	{
+	case OM::PrinterStatus::printing:
+	case OM::PrinterStatus::simulating:
+	case OM::PrinterStatus::resuming:
+		SerialIo::Sendf("M25\n");
+		jobAbortWhenPaused = true;
+		jobAbortRequestedAt = SystemTick::GetTickCount();
+		break;
+
+	case OM::PrinterStatus::pausing:
+		// A pause is already in progress: just wait for it to finish
+		jobAbortWhenPaused = true;
+		jobAbortRequestedAt = SystemTick::GetTickCount();
+		break;
+
+	default:
+		SerialIo::Sendf("M0\n");					// already paused (or not in a state where pausing makes sense)
+		break;
+	}
+}
+
 static void OpenJobStatusConfirmation(JobStatusConfirmAction action)
 {
 	jobStatusConfirmAction = action;
@@ -5126,7 +5261,7 @@ static void CreateModernStandardPopup()
 	const Colour text = UTFT::fromRGB(229, 232, 236);
 	const Colour accent = GetModernAccentColour();
 	const Colour cancelRed = UTFT::fromRGB(201, 50, 24);
-	const Colour confirmGreen = UTFT::fromRGB(191, 226, 62);
+	const Colour confirmGreen = UTFT::fromRGB(86, 184, 52);   // check mark fill #56B834
 
 	standardPopup = new PopupWindow(460, 660, pageBg, accent);
 
@@ -5134,7 +5269,7 @@ static void CreateModernStandardPopup()
 	DisplayField::SetDefaultFont(glcd28x32);
 	DisplayField::SetDefaultColours(text, tile);
 	standardPopupNameCard = new ModernCard(35, 205, 250, 60, tile, accent, false);
-	standardPopupNameField = new StaticTextField(55, 205, 250, TextAlignment::Centre, "");
+	standardPopupNameField = new StaticTextField(49, 205, 250, TextAlignment::Centre, "");	// y=49: capitals in glcd28x32 are centred in their 32-row cell, so this centres them in the 60 px tile (35..94)
 	// Add text first and card second because AddField() prepends fields.
 	// The card will therefore render first and the text will render on top.
 	standardPopup->AddField(standardPopupNameField);
@@ -5190,7 +5325,7 @@ static void ConfigureStandardPopupTitle(const char *title, bool longTitle)
 	const PixelNumber titleW = longTitle ? 550 : 250;
 	standardPopupNameCard->SetPosition(titleX, 35);
 	standardPopupNameCard->SetPositionAndWidth(titleX, titleW);
-	standardPopupNameField->SetPosition(titleX, 55);
+	standardPopupNameField->SetPosition(titleX, 49);
 	standardPopupNameField->SetPositionAndWidth(titleX, titleW);
 	standardPopupNameField->SetValue(title, true);
 }
@@ -5992,6 +6127,21 @@ namespace UI
 
 	void ChangeStatus(OM::PrinterStatus oldStatus, OM::PrinterStatus newStatus)
 	{
+#if DISPLAY_X == 800
+		if (jobAbortWhenPaused)
+		{
+			if (newStatus == OM::PrinterStatus::paused)
+			{
+				jobAbortWhenPaused = false;
+				SerialIo::Sendf("M0\n");			// the print is paused now, so it can be cancelled
+			}
+			else if (newStatus != OM::PrinterStatus::printing && newStatus != OM::PrinterStatus::pausing &&
+					 newStatus != OM::PrinterStatus::resuming && newStatus != OM::PrinterStatus::simulating)
+			{
+				jobAbortWhenPaused = false;			// the job ended (or something else happened) before it paused
+			}
+		}
+#endif
 
 		if (oldStatus != newStatus)
 		{
@@ -6213,6 +6363,9 @@ namespace UI
 			break;
 		case evTabSystem:
 			mgr.SetRoot(messageRoot);
+#if DISPLAY_X == 800
+			currentUiPage = UiPage::SystemConsole;
+#endif
 			if (keyboardIsDisplayed)
 			{
 				keyboardDataHandler = SendGcode;
@@ -6234,6 +6387,9 @@ namespace UI
 			mgr.SetRoot(commonRoot);
 			break;
 		}
+#if DISPLAY_X == 800
+		SyncTopTabHighlight();
+#endif
 		mgr.Refresh(true);
 	}
 
@@ -6366,6 +6522,11 @@ namespace UI
 		}
 #if DISPLAY_X == 800
 		const uint32_t now = SystemTick::GetTickCount();
+		SyncTopTabHighlight();
+		if (jobAbortWhenPaused && now - jobAbortRequestedAt >= JobAbortPauseTimeoutMs)
+		{
+			jobAbortWhenPaused = false;			// the print never reached the paused state, so give up on the abort
+		}
 		if (currentUiPage == UiPage::ControlTools && now - controlToolsLastTemperatureRefresh >= ControlToolsTemperatureRefreshInterval)
 		{
 			controlToolsLastTemperatureRefresh = now;
@@ -6991,19 +7152,33 @@ namespace UI
 	{
 #if DISPLAY_X == 800
 		const unsigned int newCount = static_cast<unsigned int>((count > StatusMaxObjects) ? StatusMaxObjects : count);
-		for (unsigned int i = 0; i < newCount; ++i) statusObjects[i].present = true;
+		bool somethingChanged = (statusObjectCount != newCount);
+		for (unsigned int i = 0; i < newCount; ++i)
+		{
+			if (!statusObjects[i].present)
+			{
+				statusObjects[i].present = true;
+				somethingChanged = true;
+			}
+		}
 		for (unsigned int i = newCount; i < StatusMaxObjects; ++i)
 		{
-			statusObjects[i].present = false;
-			statusObjects[i].cancelled = false;
-			statusObjects[i].xValid = false;
-			statusObjects[i].yValid = false;
-			statusObjects[i].name.Clear();
+			StatusObjectInfo& obj = statusObjects[i];
+			if (obj.present || obj.cancelled || obj.xValid || obj.yValid || !obj.name.IsEmpty())
+			{
+				somethingChanged = true;
+			}
+			obj.present = false;
+			obj.cancelled = false;
+			obj.xValid = false;
+			obj.yValid = false;
+			obj.name.Clear();
 		}
 		if (statusObjectCount != newCount) statusObjectsNeedFullRefresh = true;
 		statusObjectCount = newCount;
 		if (selectedStatusObject >= static_cast<int>(newCount)) selectedStatusObject = -1;
-		statusObjectsDirty = true;
+		if (newCount == 0 && currentStatusObject >= 0) currentStatusObject = -1;
+		if (somethingChanged) statusObjectsDirty = true;
 #else
 		UNUSED(count);
 #endif
@@ -7371,6 +7546,18 @@ namespace UI
 		case evTabSystem:
 		case evTabMsg:
 		case evTabSetup:
+#if DISPLAY_X == 800
+		case evControlTools:				// top tabs: their highlight is managed by SyncTopTabHighlight()
+		case evControlMovement:
+		case evControlExtrusion:
+		case evControlMacros:
+		case evStatusJobStatus:
+		case evStatusTune:
+		case evStatusJob:
+		case evStatusObjects:
+		case evSystemConsole:
+		case evSystemSettings:
+#endif
 
 		case evExtrudeAmount:
 		case evExtrudeRate:
@@ -8556,7 +8743,7 @@ namespace UI
 							SerialIo::Sendf("M24\n");
 						break;
 					case JobStatusConfirmAction::Abort:
-							SerialIo::Sendf("M0\n");
+						RequestJobAbort();
 						break;
 					default: break;
 					}
@@ -8669,7 +8856,12 @@ namespace UI
 				{ nvData.SetDisplayDimmerType(DisplayDimmerType::never); }
 				else
 				{ nvData.SetDisplayDimmerType(DisplayDimmerType::always); }
-				SaveSettings(); RefreshModernSettingsPage(); mgr.Press(bp, false); currentButton.Clear(); mgr.Refresh(false); break;
+				SaveSettings(); RefreshModernSettingsPage(); mgr.Press(bp, false); currentButton.Clear(); mgr.Refresh(false);
+				if (nvData.GetDisplayDimmerType() == DisplayDimmerType::always)
+				{
+					DimDisplayNow();		// show the effect straight away instead of after the idle timeout; the next touch undoes it
+				}
+				break;
 
 			case evSettingsBaudOpen:
 				mgr.Press(bp, false); currentButton.Clear(); OpenSettingsBaudPopup(); break;
@@ -9553,6 +9745,7 @@ namespace UI
 			{
 				mgr.Press(bp, false);
 			}
+			SyncTopTabHighlight();
 #endif
 		}
 	}
