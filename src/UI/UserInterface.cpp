@@ -1170,9 +1170,9 @@ void UI::SetAxisMin(size_t index, float val)
 		return;
 	}
 #if DISPLAY_X == 800
+	if (!statusObjectAxisMinValid[index] || statusObjectAxisMin[index] != val) statusObjectsDirty = true;
 	statusObjectAxisMin[index] = val;
 	statusObjectAxisMinValid[index] = true;
-	statusObjectsDirty = true;
 #endif
 }
 
@@ -1185,9 +1185,9 @@ void UI::SetAxisMax(size_t index, float val)
 
 	axisMaxVal = max(axisMaxVal, val);
 #if DISPLAY_X == 800
+	if (!statusObjectAxisMaxValid[index] || statusObjectAxisMax[index] != val) statusObjectsDirty = true;
 	statusObjectAxisMax[index] = val;
 	statusObjectAxisMaxValid[index] = true;
-	statusObjectsDirty = true;
 #endif
 }
 
@@ -1918,11 +1918,46 @@ static bool GetStatusObjectBedBounds(float& xMin, float& xMax, float& yMin, floa
 	return xMax > xMin && yMax > yMin;
 }
 
+static uint32_t FloatBits(float f)
+{
+	uint32_t u;
+	memcpy(&u, &f, sizeof(u));
+	return u;
+}
+
+static uint32_t statusObjectMapSignature = 0;
+static bool statusObjectMapSignatureValid = false;
+
 static void RefreshStatusObjectMap()
 {
 	if (statusObjectMap == nullptr)
 	{
 		return;
+	}
+
+	// Everything that decides what the map looks like, folded into one number. If it is the same as the last time the map
+	// was drawn there is nothing to do, and repainting the map anyway is what made it blink on every job update.
+	{
+		float sxMin = 0.0f, sxMax = 0.0f, syMin = 0.0f, syMax = 0.0f;
+		const bool sBounds = GetStatusObjectBedBounds(sxMin, sxMax, syMin, syMax);
+		uint32_t sig = 2166136261u;
+		const auto mix = [&sig](uint32_t v) { sig = (sig ^ v) * 16777619u; };
+		mix(sBounds ? 1u : 0u);
+		mix(FloatBits(sxMin)); mix(FloatBits(sxMax)); mix(FloatBits(syMin)); mix(FloatBits(syMax));
+		mix(statusObjectCount);
+		mix(static_cast<uint32_t>(selectedStatusObject + 1));
+		for (unsigned int i = 0; i < StatusMaxObjects && i < statusObjectCount; ++i)
+		{
+			const StatusObjectInfo& o = statusObjects[i];
+			mix((o.present ? 1u : 0u) | (o.cancelled ? 2u : 0u) | (o.xValid ? 4u : 0u) | (o.yValid ? 8u : 0u));
+			mix(FloatBits(o.xMin)); mix(FloatBits(o.xMax)); mix(FloatBits(o.yMin)); mix(FloatBits(o.yMax));
+		}
+		if (statusObjectMapSignatureValid && sig == statusObjectMapSignature)
+		{
+			return;
+		}
+		statusObjectMapSignature = sig;
+		statusObjectMapSignatureValid = true;
 	}
 
 	const Colour tile = UTFT::fromRGB(28, 34, 43);
@@ -2023,8 +2058,10 @@ static void RefreshStatusObjectMap()
 			marker->SetBorderVisible(true);
 			marker->SetBorderColour(selected ? accent : neutral);
 		}
+		// Mark the marker visible and changed, but do NOT draw it now (mgr.Show(marker, true) would): the map is redrawn by the
+		// next mgr.Refresh() and would paint over a marker drawn earlier. In the refresh pass the map comes first, then the markers.
+		marker->Show(true);
 		marker->SetChanged();
-		mgr.Show(marker, true);
 		placedX[placedCount] = static_cast<PixelNumber>(bestX);
 		placedY[placedCount] = static_cast<PixelNumber>(bestY);
 		++placedCount;
@@ -7145,10 +7182,22 @@ namespace UI
 #if DISPLAY_X == 800
 		if (objectIndex >= StatusMaxObjects) return;
 		StatusObjectInfo& obj = statusObjects[objectIndex];
+		bool changed = !obj.present;
 		obj.present = true;
-		if (name == nullptr || strcasecmp(name, "null") == 0) obj.name.Clear();
-		else obj.name.copy(name);
-		statusObjectsDirty = true;
+		if (name == nullptr || strcasecmp(name, "null") == 0)
+		{
+			if (!obj.name.IsEmpty())
+			{
+				obj.name.Clear();
+				changed = true;
+			}
+		}
+		else if (!obj.name.Equals(name))
+		{
+			obj.name.copy(name);
+			changed = true;
+		}
+		if (changed) statusObjectsDirty = true;
 #else
 		UNUSED(objectIndex); UNUSED(name);
 #endif
@@ -7158,23 +7207,37 @@ namespace UI
 	{
 #if DISPLAY_X == 800
 		if (objectIndex >= StatusMaxObjects) return;
-		statusObjects[objectIndex].present = true;
-		statusObjects[objectIndex].cancelled = cancelled;
-		statusObjectsDirty = true;
+		StatusObjectInfo& obj = statusObjects[objectIndex];
+		if (!obj.present || obj.cancelled != cancelled) statusObjectsDirty = true;
+		obj.present = true;
+		obj.cancelled = cancelled;
 #else
 		UNUSED(objectIndex); UNUSED(cancelled);
 #endif
 	}
 
+	// The coordinates of an object arrive as a two element array [min, max], repeated in every job update. So that an
+	// unchanged object does not force a repaint (which made the map blink), the new values are collected first and only
+	// committed, and the page marked dirty, when they differ from what is already stored.
+	static size_t coordObject = 0;
+	static bool coordIsX = true;
+	static bool coordActive = false;
+	static uint8_t coordCount = 0;
+	static float coordMin = 0.0f, coordMax = 0.0f;
+
 	void BeginStatusObjectCoordinate(size_t objectIndex, bool xAxis)
 	{
 #if DISPLAY_X == 800
 		if (objectIndex >= StatusMaxObjects) return;
-		StatusObjectInfo& obj = statusObjects[objectIndex];
-		obj.present = true;
-		if (xAxis) obj.xValid = false;
-		else obj.yValid = false;
-		statusObjectsDirty = true;
+		if (!statusObjects[objectIndex].present)
+		{
+			statusObjects[objectIndex].present = true;
+			statusObjectsDirty = true;
+		}
+		coordObject = objectIndex;
+		coordIsX = xAxis;
+		coordActive = true;
+		coordCount = 0;
 #else
 		UNUSED(objectIndex); UNUSED(xAxis);
 #endif
@@ -7185,10 +7248,14 @@ namespace UI
 #if DISPLAY_X == 800
 		if (objectIndex >= StatusMaxObjects) return;
 		StatusObjectInfo& obj = statusObjects[objectIndex];
+		if (!obj.present || (xAxis ? obj.xValid : obj.yValid)) statusObjectsDirty = true;
 		obj.present = true;
 		if (xAxis) obj.xValid = false;
 		else obj.yValid = false;
-		statusObjectsDirty = true;
+		if (coordActive && coordObject == objectIndex && coordIsX == xAxis)
+		{
+			coordActive = false;
+		}
 #else
 		UNUSED(objectIndex); UNUSED(xAxis);
 #endif
@@ -7199,21 +7266,44 @@ namespace UI
 #if DISPLAY_X == 800
 		if (objectIndex >= StatusMaxObjects) return;
 		StatusObjectInfo& obj = statusObjects[objectIndex];
-		obj.present = true;
-		bool& valid = xAxis ? obj.xValid : obj.yValid;
-		float& minValue = xAxis ? obj.xMin : obj.yMin;
-		float& maxValue = xAxis ? obj.xMax : obj.yMax;
-		if (!valid)
+		if (!obj.present)
 		{
-			minValue = maxValue = value;
-			valid = true;
+			obj.present = true;
+			statusObjectsDirty = true;
+		}
+		if (!coordActive || coordObject != objectIndex || coordIsX != xAxis)
+		{
+			// Not part of a sequence started by BeginStatusObjectCoordinate(): treat it as the first value
+			coordObject = objectIndex;
+			coordIsX = xAxis;
+			coordActive = true;
+			coordCount = 0;
+		}
+		if (coordCount == 0)
+		{
+			coordMin = coordMax = value;
 		}
 		else
 		{
-			if (value < minValue) minValue = value;
-			if (value > maxValue) maxValue = value;
+			if (value < coordMin) coordMin = value;
+			if (value > coordMax) coordMax = value;
 		}
-		statusObjectsDirty = true;
+		++coordCount;
+		if (coordCount >= 2)
+		{
+			// Both ends of the range have arrived: commit only if it differs from what is stored
+			bool& valid = xAxis ? obj.xValid : obj.yValid;
+			float& minValue = xAxis ? obj.xMin : obj.yMin;
+			float& maxValue = xAxis ? obj.xMax : obj.yMax;
+			if (!valid || minValue != coordMin || maxValue != coordMax)
+			{
+				minValue = coordMin;
+				maxValue = coordMax;
+				valid = true;
+				statusObjectsDirty = true;
+			}
+			coordActive = false;
+		}
 #else
 		UNUSED(objectIndex); UNUSED(xAxis); UNUSED(value);
 #endif
@@ -10697,9 +10787,10 @@ namespace UI
 			{
 				axis->letter[0] = l;
 #if DISPLAY_X == 800
+				const int oldXAxis = statusObjectXAxis, oldYAxis = statusObjectYAxis;
 				if (l == 'X') statusObjectXAxis = static_cast<int>(index);
 				else if (l == 'Y') statusObjectYAxis = static_cast<int>(index);
-				statusObjectsDirty = true;
+				if (oldXAxis != statusObjectXAxis || oldYAxis != statusObjectYAxis) statusObjectsDirty = true;
 				RefreshControlMoveHoming();
 #endif
 			}
