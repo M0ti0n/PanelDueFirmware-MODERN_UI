@@ -4743,31 +4743,31 @@ LOAD c:/program files (x86)/gnu arm embedded toolchain/10 2021.10/bin/../lib/gcc
                 0x004343d4       0x15 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
                                   0x8 (size before relaxing)
  .rodata._ZL25CreateStatusTuneTabFieldsRK12ColourScheme.constprop.0.str1.1
-                0x004343d4       0x64 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
-                                 0x67 (size before relaxing)
+                0x004343d4       0x62 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+                                 0x65 (size before relaxing)
  .rodata._ZL20RefreshJobStatusTilej.str1.1
-                0x00434438       0x5c CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+                0x00434436       0x5c CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
                                  0x61 (size before relaxing)
  .rodata._ZN2UI12CreateFieldsEmRK12ColourSchemem.str1.1
-                0x00434494       0xd8 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+                0x00434492       0xd8 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
                                  0xe3 (size before relaxing)
  .rodata._ZN2UIL14AppendTimeLeftEi.str1.1
-                0x0043456c       0x18 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+                0x0043456a       0x18 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
  .rodata._ZN2UI19UpdateTimesLeftTextEv.str1.1
-                0x00434584        0x3 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+                0x00434582        0x3 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
  .rodata._ZN2UI12ChangeStatusEN2OM13PrinterStatusES1_.str1.1
-                0x00434587       0x28 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+                0x00434585       0x28 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
  .rodata._ZN2UI12ProcessAlertERK5Alert.str1.1
-                0x004345af       0x28 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+                0x004345ad       0x28 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
                                   0x9 (size before relaxing)
  .rodata._ZN2UI19NewResponseReceivedEPKc.str1.1
-                0x004345af        0x6 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+                0x004345ad        0x6 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
  .rodata._ZL12M291TextDataPKc.str1.1
-                0x004345b5       0x28 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+                0x004345b3       0x28 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
  .rodata._ZN2UI12ProcessTouchE11ButtonPress.str1.1
-                0x004345dd      0x656 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+                0x004345db      0x656 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
                                 0x658 (size before relaxing)
- *fill*         0x00434c33        0x1 
+ *fill*         0x00434c31        0x3 
  .rodata._ZTV15ModernTouchArea
                 0x00434c34       0x2c CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
                 0x00434c34                vtable for ModernTouchArea
@@ -6551,7 +6551,7 @@ LOAD linker stubs
  .debug_ranges  0x0000b388       0x10 lib/librrf/librrf.a(Strnlen.cpp.obj)
  .debug_ranges  0x0000b398       0xd0 lib/librrf/librrf.a(NumericConverter.cpp.obj)
 
-.debug_line     0x00000000    0x43e9a
+.debug_line     0x00000000    0x43e96
  .debug_line    0x00000000      0x591 CMakeFiles/paneldue.elf.dir/src/ASF/sam/utils/cmsis/sam4s/source/templates/system_sam4s.c.obj
  .debug_line    0x00000591      0x327 CMakeFiles/paneldue.elf.dir/src/ASF/sam/utils/cmsis/sam4s/source/templates/gcc/startup_sam4s.c.obj
  .debug_line    0x000008b8      0x704 CMakeFiles/paneldue.elf.dir/src/ASF/common/services/clock/sam4s/sysclk.c.obj
@@ -6597,15 +6597,15 @@ LOAD linker stubs
  .debug_line    0x00021e0d     0x5770 CMakeFiles/paneldue.elf.dir/src/UI/Display.cpp.obj
  .debug_line    0x0002757d      0xf99 CMakeFiles/paneldue.elf.dir/src/UI/MessageLog.cpp.obj
  .debug_line    0x00028516     0x1e35 CMakeFiles/paneldue.elf.dir/src/UI/Popup.cpp.obj
- .debug_line    0x0002a34b    0x14b20 CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
- .debug_line    0x0003ee6b      0x2c6 CMakeFiles/paneldue.elf.dir/lib/base64/base64.c.obj
- .debug_line    0x0003f131      0x78f lib/librrf/librrf.a(CRC16.cpp.obj)
- .debug_line    0x0003f8c0      0x8bb lib/librrf/librrf.a(SafeStrtod.cpp.obj)
- .debug_line    0x0004017b     0x1306 lib/librrf/librrf.a(SafeVsnprintf.cpp.obj)
- .debug_line    0x00041481      0x90c lib/librrf/librrf.a(StringFunctions.cpp.obj)
- .debug_line    0x00041d8d      0xe33 lib/librrf/librrf.a(StringRef.cpp.obj)
- .debug_line    0x00042bc0      0x663 lib/librrf/librrf.a(Strnlen.cpp.obj)
- .debug_line    0x00043223      0xc77 lib/librrf/librrf.a(NumericConverter.cpp.obj)
+ .debug_line    0x0002a34b    0x14b1c CMakeFiles/paneldue.elf.dir/src/UI/UserInterface.cpp.obj
+ .debug_line    0x0003ee67      0x2c6 CMakeFiles/paneldue.elf.dir/lib/base64/base64.c.obj
+ .debug_line    0x0003f12d      0x78f lib/librrf/librrf.a(CRC16.cpp.obj)
+ .debug_line    0x0003f8bc      0x8bb lib/librrf/librrf.a(SafeStrtod.cpp.obj)
+ .debug_line    0x00040177     0x1306 lib/librrf/librrf.a(SafeVsnprintf.cpp.obj)
+ .debug_line    0x0004147d      0x90c lib/librrf/librrf.a(StringFunctions.cpp.obj)
+ .debug_line    0x00041d89      0xe33 lib/librrf/librrf.a(StringRef.cpp.obj)
+ .debug_line    0x00042bbc      0x663 lib/librrf/librrf.a(Strnlen.cpp.obj)
+ .debug_line    0x0004321f      0xc77 lib/librrf/librrf.a(NumericConverter.cpp.obj)
 
 .debug_str      0x00000000    0x2ce9e
  .debug_str     0x00000000      0x486 CMakeFiles/paneldue.elf.dir/src/ASF/sam/utils/cmsis/sam4s/source/templates/system_sam4s.c.obj

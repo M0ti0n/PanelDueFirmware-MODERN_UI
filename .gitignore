@@ -81,3 +81,7 @@ compile_commands.json
 /Release-v2-5.0/
 /Release-v2-7.0/
 /Release-v2-7.0CPLD/
+# Directories created during build
+build/
+build-v3-7/
+build-v3-5/
