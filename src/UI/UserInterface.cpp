@@ -168,7 +168,9 @@ enum class StandardPopupContext : uint8_t
 	M291NumberFloat,
 	M291Text,
 	SettingsFeedrate,
-	SettingsBabystep
+	SettingsBabystep,
+	Filasnake,
+	FilasnakeConfirm		// "bored waiting?" question before the game
 };
 static StandardPopupContext standardPopupContext = StandardPopupContext::None;
 static PopupWindow *standardPopup = nullptr;
@@ -2381,6 +2383,8 @@ static void CreateSetupTabFields(const ColourScheme& colours)
 	mgr.AddField(freeMem);
 
 	mgr.AddField(new ModernCard(380, 350, 200, 60, tile, neutralBorder, false));
+	// Easter egg: tapping the RAM tile opens Filasnake. The touch area draws nothing.
+	mgr.AddField(new ModernTouchArea(380, 350, 200, 60, evFilasnakeOpen, 0));
 
 	DisplayField::SetDefaultColours(UTFT::fromRGB(245,245,245), resetRed);
 	mgr.AddField(new ModernTextButton(380, 582, 200, 60, "FACTORY RESET", evSettingsFactoryResetOpen, 0, glcd19x21, false));
@@ -5209,6 +5213,30 @@ static void RefreshTuneToolRows()
 	RefreshTuneGeneralFans();
 }
 
+// Paint the TUNE Z offset tile from the object model. With force == false the tile is only
+// repainted when the displayed text actually changes, so it can be called on every value that
+// RRF pushes without causing flicker.
+static void RefreshTuneZOffset(bool force)
+{
+	OM::IterateAxesWhile([force](OM::Axis*& axis, size_t) {
+		if (axis != nullptr && axis->letter[0] == 'Z')
+		{
+			String<16> newText;
+			newText.printf("%.3f", (double)axis->babystep);
+			if (force || strcmp(newText.c_str(), tuneZOffsetText.c_str()) != 0)
+			{
+				tuneZOffsetText.copy(newText.c_str());
+				if (tuneZOffsetButton != nullptr)
+				{
+					tuneZOffsetButton->SetText(tuneZOffsetText.c_str());
+				}
+			}
+			return false;
+		}
+		return true;
+	});
+}
+
 static void RefreshTunePage()
 {
 	if (tuneSpeedButton != nullptr)
@@ -5217,20 +5245,9 @@ static void RefreshTunePage()
 		tuneSpeedButton->SetText(tuneSpeedText.c_str());
 	}
 
-	// Z offset is cached in the object model. Only paint it when TUNE itself
-	// is deliberately refreshed (tab entry, page change, or local action).
-	OM::IterateAxesWhile([](OM::Axis*& axis, size_t) {
-		if (axis != nullptr && axis->letter[0] == 'Z')
-		{
-			tuneZOffsetText.printf("%.3f", (double)axis->babystep);
-			if (tuneZOffsetButton != nullptr)
-			{
-				tuneZOffsetButton->SetText(tuneZOffsetText.c_str());
-			}
-			return false;
-		}
-		return true;
-	});
+	// Full repaint on tab entry, page change or local action. Values pushed by RRF while TUNE is
+	// open are handled by SetBabystepOffset()/SetAxisLetter().
+	RefreshTuneZOffset(true);
 
 	RefreshTuneToolRows();
 }
@@ -5388,6 +5405,481 @@ static void CloseStandardPopup()
 	standardPopupChoiceCount = 0;
 }
 
+// =====================================================================================================
+// FILASNAKE - a Nokia-style snake game drawn inside the shared standard popup.
+// Board on the left (20 x 20 cells of 20 px), score tiles and a D-pad on the right.
+// RAM: a 50 byte occupancy bitmap plus a 100 byte ring of 2-bit directions (one per body joint), so the
+// snake can grow to fill the whole board without a per-segment coordinate array.
+// =====================================================================================================
+static constexpr unsigned int SnakeCols = 20, SnakeRows = 20, SnakeCells = SnakeCols * SnakeRows;
+static constexpr PixelNumber SnakeCellSize = 20;
+static constexpr uint16_t SnakeNoFood = 0xFFFF;
+static constexpr uint16_t SnakeStartInterval = 220;		// ms per step at the start
+static constexpr uint16_t SnakeMinInterval = 90;		// fastest speed
+static constexpr uint16_t SnakeIntervalStep = 4;		// ms faster per piece of food
+
+static constexpr Colour SnakeLcdColour = UTFT::fromRGB(199, 240, 216);	// Nokia LCD green  #C7F0D8
+static constexpr Colour SnakeInkColour = UTFT::fromRGB(67, 82, 61);		// Nokia LCD pixels #43523D
+static constexpr Colour SnakeDeadColour = UTFT::fromRGB(140, 168, 146);	// faded snake after game over
+
+enum class SnakeState : uint8_t { Ready, Running, Paused, Over };
+enum class SnakeEnd : uint8_t { None, Wall, Self, Full };		// why the last game ended
+enum SnakeDirection : uint8_t { SnakeUp = 0, SnakeRight = 1, SnakeDown = 2, SnakeLeft = 3 };
+static const int8_t snakeDx[4] = { 0, 1, 0, -1 };
+static const int8_t snakeDy[4] = { -1, 0, 1, 0 };
+
+static uint8_t snakeOccupied[(SnakeCells + 7) / 8];
+static uint8_t snakeDirRing[SnakeCells / 4];		// 2 bits per entry, SnakeCells entries
+static uint16_t snakeRingHead = 0, snakeRingTail = 0;
+static uint16_t snakeLength = 0;
+static uint8_t snakeHeadX = 0, snakeHeadY = 0, snakeTailX = 0, snakeTailY = 0;
+static uint8_t snakeDir = SnakeRight;
+static uint8_t snakeTurnQueue[2];
+static uint8_t snakeTurnCount = 0;
+static uint16_t snakeFood = SnakeNoFood;
+static uint16_t snakeScore = 0, snakeBest = 0;
+static uint16_t snakeInterval = SnakeStartInterval;
+static uint32_t snakeLastStep = 0;
+static uint32_t snakeRandom = 0x9E3779B9u;
+static SnakeState snakeState = SnakeState::Ready;
+static SnakeEnd snakeEnd = SnakeEnd::None;
+static bool snakeInitialised = false;
+static constexpr PixelNumber SnakePopupX = 110;			// popup kept clear of the left rail so the STOP button stays usable
+static String<16> snakeScoreText, snakeStatusText;
+
+static inline bool SnakeIsOccupied(uint16_t cell) { return (snakeOccupied[cell >> 3] & (1u << (cell & 7))) != 0; }
+
+static inline void SnakeSetOccupied(uint16_t cell, bool occupied)
+{
+	if (occupied) { snakeOccupied[cell >> 3] |= (uint8_t)(1u << (cell & 7)); }
+	else { snakeOccupied[cell >> 3] &= (uint8_t)~(1u << (cell & 7)); }
+}
+
+static inline uint8_t SnakeRingGet(uint16_t i) { return (snakeDirRing[i >> 2] >> ((i & 3) * 2)) & 3; }
+
+static inline void SnakeRingSet(uint16_t i, uint8_t d)
+{
+	const unsigned int shift = (i & 3) * 2;
+	snakeDirRing[i >> 2] = (uint8_t)((snakeDirRing[i >> 2] & ~(3u << shift)) | ((d & 3u) << shift));
+}
+
+// The board, including a 2 px frame. Only the cells that changed are repainted on each step.
+class FilasnakeBoardField : public DisplayField
+{
+private:
+	uint16_t dirtyCells[4];
+	uint8_t dirtyCount = 0;
+	bool fullPending = true;
+
+	void DrawCell(PixelNumber ox, PixelNumber oy, uint16_t cell) const
+	{
+		const PixelNumber cx = ox + (cell % SnakeCols) * SnakeCellSize;
+		const PixelNumber cy = oy + (cell / SnakeCols) * SnakeCellSize;
+		lcd.setColor(SnakeLcdColour);
+		lcd.fillRect(cx, cy, cx + SnakeCellSize - 1, cy + SnakeCellSize - 1);
+		if (SnakeIsOccupied(cell))
+		{
+			// 18 x 18 block with a 2 px gap to the next one gives the chunky LCD-pixel look
+			lcd.setColor((snakeState == SnakeState::Over) ? SnakeDeadColour : SnakeInkColour);
+			lcd.fillRect(cx + 1, cy + 1, cx + SnakeCellSize - 2, cy + SnakeCellSize - 2);
+		}
+		else if (cell == snakeFood)
+		{
+			lcd.setColor(SnakeInkColour);
+			lcd.fillRect(cx + 6, cy + 6, cx + SnakeCellSize - 7, cy + SnakeCellSize - 7);
+		}
+	}
+
+	static void DrawCentredText(const char *t, LcdFont font, PixelNumber left, PixelNumber width, PixelNumber top)
+	{
+		lcd.setFont(font);
+		lcd.setTextPos(0, 9999, width);			// print off-screen first to measure the width
+		lcd.printf("%s", t);
+		const PixelNumber textWidth = lcd.getTextX();
+		lcd.setTextPos(left + ((width > textWidth) ? (width - textWidth) / 2 : 0), top, left + width);
+		lcd.printf("%s", t);
+	}
+
+	// Inverted Nokia-style message box over the middle of the board after hitting the wall
+	static void DrawCrashMessage(PixelNumber ox, PixelNumber oy)
+	{
+		const PixelNumber boxW = 340, boxH = 130;
+		const PixelNumber left = ox + (SnakeCols * SnakeCellSize - boxW) / 2;
+		const PixelNumber top = oy + (SnakeRows * SnakeCellSize - boxH) / 2;
+		lcd.setColor(SnakeInkColour);
+		lcd.fillRect(left, top, left + boxW - 1, top + boxH - 1);
+		lcd.setColor(SnakeLcdColour);
+		lcd.drawRect(left + 4, top + 4, left + boxW - 5, top + boxH - 5);
+		lcd.setTransparentBackground(true);
+		DrawCentredText("GAME OVER", glcd28x32, left, boxW, top + 16);
+		DrawCentredText("YOU CRASHED", glcd19x21, left, boxW, top + 60);
+		DrawCentredText("THE TOOLHEAD!", glcd19x21, left, boxW, top + 88);
+		lcd.setTransparentBackground(false);
+	}
+
+protected:
+	PixelNumber GetHeight() const override { return SnakeRows * SnakeCellSize + 4; }
+
+public:
+	FilasnakeBoardField(PixelNumber py, PixelNumber px) : DisplayField(py, px, SnakeCols * SnakeCellSize + 4) { }
+
+	void MarkCell(uint16_t cell)
+	{
+		if (dirtyCount < ARRAY_SIZE(dirtyCells)) { dirtyCells[dirtyCount++] = cell; }
+		else { fullPending = true; }
+		changed = true;
+	}
+
+	void MarkAll() { fullPending = true; dirtyCount = 0; changed = true; }
+
+	void Refresh(bool full, PixelNumber xOffset, PixelNumber yOffset) override
+	{
+		if (!full && !changed) return;
+		const PixelNumber ox = x + xOffset + 2;			// top-left of cell (0,0)
+		const PixelNumber oy = y + yOffset + 2;
+		if (full || fullPending)
+		{
+			const PixelNumber w = SnakeCols * SnakeCellSize, h = SnakeRows * SnakeCellSize;
+			lcd.setColor(SnakeInkColour);
+			lcd.drawRect(ox - 2, oy - 2, ox + w + 1, oy + h + 1);
+			lcd.drawRect(ox - 1, oy - 1, ox + w, oy + h);
+			lcd.setColor(SnakeLcdColour);
+			lcd.fillRect(ox, oy, ox + w - 1, oy + h - 1);
+			for (uint16_t cell = 0; cell < SnakeCells; ++cell)
+			{
+				if (SnakeIsOccupied(cell) || cell == snakeFood)
+				{
+					DrawCell(ox, oy, cell);
+				}
+			}
+			if (snakeState == SnakeState::Over && snakeEnd == SnakeEnd::Wall)
+			{
+				DrawCrashMessage(ox, oy);
+			}
+		}
+		else
+		{
+			for (uint8_t i = 0; i < dirtyCount; ++i)
+			{
+				DrawCell(ox, oy, dirtyCells[i]);
+			}
+		}
+		dirtyCount = 0;
+		fullPending = false;
+		changed = false;
+	}
+};
+
+static FilasnakeBoardField *filasnakeBoard = nullptr;
+
+static uint32_t SnakeRand()
+{
+	uint32_t v = snakeRandom;			// xorshift32
+	v ^= v << 13; v ^= v >> 17; v ^= v << 5;
+	snakeRandom = v;
+	return v;
+}
+
+static void SnakePlaceFood()
+{
+	if (snakeLength >= SnakeCells)
+	{
+		snakeFood = SnakeNoFood;
+		return;
+	}
+	uint16_t cell = (uint16_t)(SnakeRand() % SnakeCells);
+	while (SnakeIsOccupied(cell))
+	{
+		cell = (uint16_t)((cell + 1) % SnakeCells);
+	}
+	snakeFood = cell;
+}
+
+static void FilasnakeRefreshLabels()
+{
+	snakeScoreText.printf("SCORE %u", (unsigned int)snakeScore);
+	switch (snakeState)
+	{
+	case SnakeState::Over:
+		snakeStatusText.copy((snakeEnd == SnakeEnd::Full) ? "YOU WIN!" : (snakeEnd == SnakeEnd::Wall) ? "CRASHED!" : "GAME OVER");
+		break;
+	case SnakeState::Paused:
+		snakeStatusText.copy("PAUSED");
+		break;
+	default:
+		snakeStatusText.printf("BEST %u", (unsigned int)snakeBest);
+		break;
+	}
+	if (standardPopupContext == StandardPopupContext::Filasnake)
+	{
+		standardPopupChoiceButtons[0]->SetText(snakeScoreText.c_str());
+		standardPopupChoiceButtons[1]->SetText(snakeStatusText.c_str());
+		standardPopupChoiceButtons[6]->SetText((snakeState == SnakeState::Running) ? "II" : "GO");
+	}
+}
+
+static void FilasnakeReset()
+{
+	memset(snakeOccupied, 0, sizeof(snakeOccupied));
+	memset(snakeDirRing, 0, sizeof(snakeDirRing));
+	snakeRandom ^= SystemTick::GetTickCount() | 1u;
+	if (snakeRandom == 0)
+	{
+		snakeRandom = 0x9E3779B9u;			// xorshift must never be seeded with 0
+	}
+
+	// Length 4 in the middle row, heading right
+	snakeTailX = 6; snakeTailY = SnakeRows / 2;
+	snakeLength = 4;
+	for (uint16_t i = 0; i < snakeLength; ++i)
+	{
+		SnakeSetOccupied(snakeTailY * SnakeCols + snakeTailX + i, true);
+	}
+	snakeRingTail = 0;
+	snakeRingHead = snakeLength - 1;
+	for (uint16_t i = 0; i < snakeRingHead; ++i)
+	{
+		SnakeRingSet(i, SnakeRight);
+	}
+	snakeHeadX = snakeTailX + snakeLength - 1; snakeHeadY = snakeTailY;
+	snakeDir = SnakeRight;
+	snakeTurnCount = 0;
+	snakeScore = 0;
+	snakeInterval = SnakeStartInterval;
+	SnakePlaceFood();
+	snakeState = SnakeState::Ready;
+	snakeEnd = SnakeEnd::None;
+	snakeInitialised = true;
+	if (filasnakeBoard != nullptr)
+	{
+		filasnakeBoard->MarkAll();
+	}
+}
+
+static void FilasnakeGameOver(SnakeEnd why)
+{
+	snakeState = SnakeState::Over;
+	snakeEnd = why;
+	Buzzer::Beep(220, 400, nvData.GetVolume());
+	filasnakeBoard->MarkAll();				// repaint the snake in the faded colour
+	FilasnakeRefreshLabels();
+}
+
+static void FilasnakeStep()
+{
+	if (snakeTurnCount != 0)
+	{
+		snakeDir = snakeTurnQueue[0];
+		snakeTurnQueue[0] = snakeTurnQueue[1];
+		--snakeTurnCount;
+	}
+
+	const int nx = (int)snakeHeadX + snakeDx[snakeDir];
+	const int ny = (int)snakeHeadY + snakeDy[snakeDir];
+	if (nx < 0 || ny < 0 || nx >= (int)SnakeCols || ny >= (int)SnakeRows)
+	{
+		FilasnakeGameOver(SnakeEnd::Wall);
+		return;
+	}
+	const uint16_t newCell = (uint16_t)(ny * SnakeCols + nx);
+	const bool grow = (newCell == snakeFood);
+
+	if (!grow)
+	{
+		// Move the tail first, so the head may legally follow into the cell the tail just left
+		const uint16_t tailCell = (uint16_t)(snakeTailY * SnakeCols + snakeTailX);
+		const uint8_t d = SnakeRingGet(snakeRingTail);
+		SnakeSetOccupied(tailCell, false);
+		snakeTailX = (uint8_t)(snakeTailX + snakeDx[d]);
+		snakeTailY = (uint8_t)(snakeTailY + snakeDy[d]);
+		snakeRingTail = (uint16_t)((snakeRingTail + 1) % SnakeCells);
+		filasnakeBoard->MarkCell(tailCell);
+	}
+
+	if (SnakeIsOccupied(newCell))
+	{
+		FilasnakeGameOver(SnakeEnd::Self);
+		return;
+	}
+
+	SnakeSetOccupied(newCell, true);
+	SnakeRingSet(snakeRingHead, snakeDir);
+	snakeRingHead = (uint16_t)((snakeRingHead + 1) % SnakeCells);
+	snakeHeadX = (uint8_t)nx;
+	snakeHeadY = (uint8_t)ny;
+	filasnakeBoard->MarkCell(newCell);
+
+	if (grow)
+	{
+		++snakeLength;
+		++snakeScore;
+		if (snakeScore > snakeBest)
+		{
+			snakeBest = snakeScore;
+		}
+		if (snakeInterval > SnakeMinInterval + SnakeIntervalStep)
+		{
+			snakeInterval -= SnakeIntervalStep;
+		}
+		else
+		{
+			snakeInterval = SnakeMinInterval;
+		}
+		SnakePlaceFood();
+		if (snakeFood == SnakeNoFood)
+		{
+			FilasnakeGameOver(SnakeEnd::Full);
+			return;
+		}
+		filasnakeBoard->MarkCell(snakeFood);
+		Buzzer::Beep(1800, 25, nvData.GetVolume());
+		FilasnakeRefreshLabels();
+	}
+}
+
+static void FilasnakeStart()
+{
+	snakeState = SnakeState::Running;
+	snakeLastStep = SystemTick::GetTickCount();
+	FilasnakeRefreshLabels();
+}
+
+// D-pad. A direction also starts a new game or resumes a paused one.
+static void FilasnakeDirection(int d)
+{
+	if (d < 0 || d > 3 || snakeState == SnakeState::Over)
+	{
+		return;
+	}
+	const uint8_t last = (snakeTurnCount != 0) ? snakeTurnQueue[snakeTurnCount - 1] : snakeDir;
+	if ((uint8_t)d != last && (uint8_t)d != ((last + 2) & 3) && snakeTurnCount < ARRAY_SIZE(snakeTurnQueue))
+	{
+		snakeTurnQueue[snakeTurnCount++] = (uint8_t)d;		// up to two turns are buffered for quick corners
+	}
+	if (snakeState != SnakeState::Running)
+	{
+		FilasnakeStart();
+	}
+}
+
+// Centre button: GO / pause / restart after game over
+static void FilasnakeGo()
+{
+	switch (snakeState)
+	{
+	case SnakeState::Running:
+		snakeState = SnakeState::Paused;
+		FilasnakeRefreshLabels();
+		break;
+	case SnakeState::Over:
+		FilasnakeReset();
+		FilasnakeStart();
+		break;
+	default:
+		FilasnakeStart();
+		break;
+	}
+}
+
+static void OpenFilasnakePopup();
+
+// First step when the RAM tile is tapped: a friendly question before the game opens.
+// The game sends nothing to the printer, so it is fine to play during a print.
+static void OpenFilasnakeIntro()
+{
+	if (standardPopup == nullptr)
+	{
+		return;
+	}
+	standardPopupContext = StandardPopupContext::FilasnakeConfirm;
+	ConfigureStandardPopupTitle("FILASNAKE", false);
+	ResetStandardPopupContent();
+	ConfigureStandardPopupInformation("Are you bored waiting for", "the printer to finish?", "Here, have some FILASNAKE :)");
+	standardPopupCancelButton->Show(true);
+	standardPopupConfirmButton->Show(true);
+	mgr.SetPopup(standardPopup, AutoPlace, AutoPlace);
+}
+
+// Called from Spin(). Pauses the game if anything else takes over the shared popup (e.g. an M291 alert).
+static void FilasnakeSpin(uint32_t now)
+{
+	if (snakeState != SnakeState::Running)
+	{
+		return;
+	}
+	if (standardPopupContext != StandardPopupContext::Filasnake || standardPopup == nullptr || !mgr.IsPopupActive(standardPopup))
+	{
+		snakeState = SnakeState::Paused;
+		return;
+	}
+	if (now - snakeLastStep >= snakeInterval)
+	{
+		snakeLastStep = now;
+		FilasnakeStep();
+	}
+}
+
+static void OpenFilasnakePopup()
+{
+	if (standardPopup == nullptr || filasnakeBoard == nullptr)
+	{
+		return;
+	}
+	if (!snakeInitialised)
+	{
+		FilasnakeReset();
+	}
+
+	const Colour tile = UTFT::fromRGB(28, 34, 43);
+	const Colour text = UTFT::fromRGB(229, 232, 236);
+	const Colour neutralBorder = UTFT::fromRGB(59, 67, 79);
+	const Colour accent = GetModernAccentColour();
+
+	standardPopupContext = StandardPopupContext::Filasnake;
+	ResetStandardPopupContent();
+	standardPopupNameCard->Show(false);
+	standardPopupNameField->Show(false);
+	standardPopupConfirmButton->Show(false);
+	standardPopupCancelButton->SetPosition(485, 372);
+	standardPopupCancelButton->Show(true);
+
+	// Slots 0/1: read-only SCORE and BEST/status tiles. Slots 2..5: D-pad. Slot 6: GO/pause in the middle.
+	struct SnakeButtonDef { PixelNumber x, y, w; const char *label; Event ev; int param; };
+	static const SnakeButtonDef defs[7] =
+	{
+		{ 444,  30, 192, "",          evNull,        0 },
+		{ 444,  96, 192, "",          evNull,        0 },
+		{ 510, 170,  60, UP_ARROW,    evFilasnakeDir, SnakeUp },
+		{ 444, 236,  60, LEFT_ARROW,  evFilasnakeDir, SnakeLeft },
+		{ 576, 236,  60, RIGHT_ARROW, evFilasnakeDir, SnakeRight },
+		{ 510, 302,  60, DOWN_ARROW,  evFilasnakeDir, SnakeDown },
+		{ 510, 236,  60, "GO",        evFilasnakeGo,  0 },
+	};
+	for (size_t i = 0; i < ARRAY_SIZE(defs); ++i)
+	{
+		ModernTextButton * const b = standardPopupChoiceButtons[i];
+		b->SetPosition(defs[i].x, defs[i].y);
+		b->SetPositionAndWidth(defs[i].x, defs[i].w);
+		b->SetColours(text, tile);
+		b->SetText(defs[i].label);
+		b->SetEvent(defs[i].ev, defs[i].param);
+		b->SetBorderColour((i == 6) ? accent : neutralBorder);
+		b->SetBorderVisible(true);
+		b->Show(true);
+	}
+
+	filasnakeBoard->Show(true);
+	filasnakeBoard->MarkAll();
+	FilasnakeRefreshLabels();
+	// Shift the popup right so it does not overlap the left rail: a partly covered button does not
+	// react to touches, and the rail STOP button must stay usable while the toolhead is moving.
+	if (mgr.IsPopupActive(standardPopup))
+	{
+		mgr.ClearPopup(true, standardPopup);		// it may still be showing at the centred position
+	}
+	mgr.SetPopup(standardPopup, SnakePopupX, AutoPlace);
+}
+
 static void CreateModernStandardPopup()
 {
 	const Colour pageBg = UTFT::fromRGB(18, 22, 28);
@@ -5437,6 +5929,11 @@ static void CreateModernStandardPopup()
 		standardPopupChoiceButtons[i]->Show(false);
 		standardPopup->AddField(standardPopupChoiceButtons[i]);
 	}
+
+	// Filasnake board, hidden except in the Filasnake context. Its frame starts at popup x=18, y=28.
+	filasnakeBoard = new FilasnakeBoardField(28, 18);
+	filasnakeBoard->Show(false);
+	standardPopup->AddField(filasnakeBoard);
 
 	// Bottom actions use the final fixed 110x78 geometry and y=332 position.
 	// Trash is normally hidden and is only shown by the JOB file-detail context.
@@ -5496,6 +5993,12 @@ static void ResetStandardPopupContent()
 	standardPopupTrashButton->Show(false);
 	standardPopupCancelButton->SetPosition(189, 332);
 	standardPopupConfirmButton->SetPosition(362, 332);
+	standardPopupCancelButton->Show(true);
+	standardPopupConfirmButton->Show(true);
+	if (filasnakeBoard != nullptr)
+	{
+		filasnakeBoard->Show(false);
+	}
 }
 
 static void ConfigureStandardPopupInformation(const char *line1, const char *line2, const char *line3, const char *line4)
@@ -6666,6 +7169,7 @@ namespace UI
 #if DISPLAY_X == 800
 		const uint32_t now = SystemTick::GetTickCount();
 		SyncTopTabHighlight();
+		FilasnakeSpin(now);
 		if (jobAbortWhenPaused && now - jobAbortRequestedAt >= JobAbortPauseTimeoutMs)
 		{
 			jobAbortWhenPaused = false;			// the print never reached the paused state, so give up on the abort
@@ -8895,6 +9399,9 @@ namespace UI
 					currentButton.Clear();
 					FactoryReset();
 					break;
+				case StandardPopupContext::FilasnakeConfirm:
+					OpenFilasnakePopup();
+					break;
 				case StandardPopupContext::TuneSpeed:
 					SerialIo::Sendf("M220 S%d\n", tunePopupPercent);
 					tuneSpeedPercent = tunePopupPercent;
@@ -9112,6 +9619,17 @@ namespace UI
 
 			case evSettingsFactoryResetOpen:
 				mgr.Press(bp, false); currentButton.Clear(); OpenSettingsFactoryResetPopup(); break;
+
+			case evFilasnakeOpen:
+				mgr.Press(bp, false); currentButton.Clear(); OpenFilasnakeIntro(); break;
+
+			case evFilasnakeDir:
+				FilasnakeDirection(bp.GetIParam());	// the button stays highlighted until the finger lifts
+				break;
+
+			case evFilasnakeGo:
+				FilasnakeGo();
+				break;
 
 			case evSettingsPopupCancel:
 				mgr.ClearPopup(); currentButton.Clear(); break;
@@ -10851,6 +11369,13 @@ namespace UI
 				{
 					babystepOffsetField->SetValue(f);
 				}
+#if DISPLAY_X == 800
+				// RRF pushed a new babystep value (e.g. from DWC, a macro or M290) while TUNE is open.
+				if (currentUiPage == UiPage::StatusTune)
+				{
+					RefreshTuneZOffset(false);
+				}
+#endif
 			}
 		}
 	}
@@ -10869,6 +11394,11 @@ namespace UI
 				else if (l == 'Y') statusObjectYAxis = static_cast<int>(index);
 				if (oldXAxis != statusObjectXAxis || oldYAxis != statusObjectYAxis) statusObjectsDirty = true;
 				RefreshControlMoveHoming();
+				// On first connect the babystep value can arrive before the axis letter.
+				if (l == 'Z' && currentUiPage == UiPage::StatusTune)
+				{
+					RefreshTuneZOffset(false);
+				}
 #endif
 			}
 		}

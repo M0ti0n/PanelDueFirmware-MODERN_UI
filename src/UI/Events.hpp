@@ -195,6 +195,11 @@ enum Event : uint8_t
 	evStandardPopupConfirm,
 	evStandardPopupCancel,
 
+	// Filasnake (SYSTEM > SETTINGS easter egg). Appended so existing event values stay stable.
+	evFilasnakeOpen,
+	evFilasnakeDir,		// iParam = direction 0 up, 1 right, 2 down, 3 left
+	evFilasnakeGo,
+
 };
 
 #endif /* SRC_UI_EVENTS_HPP_ */

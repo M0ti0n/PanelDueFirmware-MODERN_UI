@@ -1,8 +1,0 @@
-C:/Users/melit/Desktop/MIHA/VORON350ish/CONFIG/SCREEN UI MODERN/PanelDueFirmware-MODERN-v2/build-7i/CMakeFiles/paneldue.elf.dir
-C:/Users/melit/Desktop/MIHA/VORON350ish/CONFIG/SCREEN UI MODERN/PanelDueFirmware-MODERN-v2/build-7i/CMakeFiles/bin.dir
-C:/Users/melit/Desktop/MIHA/VORON350ish/CONFIG/SCREEN UI MODERN/PanelDueFirmware-MODERN-v2/build-7i/CMakeFiles/print-device.dir
-C:/Users/melit/Desktop/MIHA/VORON350ish/CONFIG/SCREEN UI MODERN/PanelDueFirmware-MODERN-v2/build-7i/CMakeFiles/edit_cache.dir
-C:/Users/melit/Desktop/MIHA/VORON350ish/CONFIG/SCREEN UI MODERN/PanelDueFirmware-MODERN-v2/build-7i/CMakeFiles/rebuild_cache.dir
-C:/Users/melit/Desktop/MIHA/VORON350ish/CONFIG/SCREEN UI MODERN/PanelDueFirmware-MODERN-v2/build-7i/lib/librrf/CMakeFiles/rrf.dir
-C:/Users/melit/Desktop/MIHA/VORON350ish/CONFIG/SCREEN UI MODERN/PanelDueFirmware-MODERN-v2/build-7i/lib/librrf/CMakeFiles/edit_cache.dir
-C:/Users/melit/Desktop/MIHA/VORON350ish/CONFIG/SCREEN UI MODERN/PanelDueFirmware-MODERN-v2/build-7i/lib/librrf/CMakeFiles/rebuild_cache.dir
