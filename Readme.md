@@ -77,6 +77,14 @@ v3-7.0c
 5.0i
 7.0i
 
+## Firmware Downloads
+
+- [PanelDue v3 7.0](last%20versions%20compiled/paneldue-v3-7.0.bin)
+- [PanelDue v3 5.0](last%20versions%20compiled/paneldue-v3-5.0.bin)
+- [PanelDue v3 7.0c](last%20versions%20compiled/paneldue-v3-7.0c.bin)
+- [PanelDue 5.0i](last%20versions%20compiled/paneldue-5.0i.bin)
+- [PanelDue 7.0i](last%20versions%20compiled/paneldue-7.0i.bin)
+
 ## Repository status
 
 This project is a community-maintained fork. For the latest information about supported hardware, firmware compatibility, building, installation, and configuration, please check the repository documentation and open issues.
