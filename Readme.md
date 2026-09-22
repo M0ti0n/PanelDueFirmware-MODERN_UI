@@ -20,17 +20,18 @@ UI is devised in to 3 master sections (TABS) on the left vertical rail.
 
   ### TOOLS
 ![CONTROL - TOOLS](docs/screenshots/control-tools.png)
+
 Lists RRF tools, beds and chambers and shows current heater temperature plus active/standby targets. Tapping targets edits       temperatures, tool headers handle tool selection, and the power tile only turns an active heater off. If there are more than 5 heating elements configured (4 toolhead, bed and chamber heater for example) a second page under tools is created with the buttons to navigate between them shown. First page will in this case hold 4 heater columns and 2 most right columns get pushed to second page.      
      
   ### MOVE
 ![CONTROL - MOVE](docs/screenshots/control-move.png)
 
-    Shows live X/Y/Z positions, selectable jog distance and direct X/Y/Z jog controls. Homing buttons reflect RRF homed state and G32 bed compensation is available from the same page.
+Shows live X/Y/Z positions, selectable jog distance and direct X/Y/Z jog controls. Homing buttons reflect RRF homed state and G32 bed compensation is available from the same page.
     
   ### EXTRUDE
 ![CONTROL - EXTRUDE](docs/screenshots/control-extrude.png)
 
-    Shows the active tool and nozzle temperature, with preset extrusion speeds of 2/5/10/20 mm/s and distances of 10/20/50/150 mm. Retract/extrude actions are blocked unless an active tool exists and its heater meets RRF's cold-extrusion temperature threshold.
+Shows the active tool and nozzle temperature, with preset extrusion speeds of 2/5/10/20 mm/s and distances of 10/20/50/150 mm. Retract/extrude actions are blocked unless an active tool exists and its heater meets RRF's cold-extrusion temperature threshold.
     
   ### MACROS
 ![CONTROL - MACROS](docs/screenshots/control-macros.png)
