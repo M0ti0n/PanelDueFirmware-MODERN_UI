@@ -5209,6 +5209,30 @@ static void RefreshTuneToolRows()
 	RefreshTuneGeneralFans();
 }
 
+// Paint the TUNE Z offset tile from the object model. With force == false the tile is only
+// repainted when the displayed text actually changes, so it can be called on every value that
+// RRF pushes without causing flicker.
+static void RefreshTuneZOffset(bool force)
+{
+	OM::IterateAxesWhile([force](OM::Axis*& axis, size_t) {
+		if (axis != nullptr && axis->letter[0] == 'Z')
+		{
+			String<16> newText;
+			newText.printf("%.3f", (double)axis->babystep);
+			if (force || strcmp(newText.c_str(), tuneZOffsetText.c_str()) != 0)
+			{
+				tuneZOffsetText.copy(newText.c_str());
+				if (tuneZOffsetButton != nullptr)
+				{
+					tuneZOffsetButton->SetText(tuneZOffsetText.c_str());
+				}
+			}
+			return false;
+		}
+		return true;
+	});
+}
+
 static void RefreshTunePage()
 {
 	if (tuneSpeedButton != nullptr)
@@ -5217,20 +5241,9 @@ static void RefreshTunePage()
 		tuneSpeedButton->SetText(tuneSpeedText.c_str());
 	}
 
-	// Z offset is cached in the object model. Only paint it when TUNE itself
-	// is deliberately refreshed (tab entry, page change, or local action).
-	OM::IterateAxesWhile([](OM::Axis*& axis, size_t) {
-		if (axis != nullptr && axis->letter[0] == 'Z')
-		{
-			tuneZOffsetText.printf("%.3f", (double)axis->babystep);
-			if (tuneZOffsetButton != nullptr)
-			{
-				tuneZOffsetButton->SetText(tuneZOffsetText.c_str());
-			}
-			return false;
-		}
-		return true;
-	});
+	// Full repaint on tab entry, page change or local action. Values pushed by RRF while TUNE is
+	// open are handled by SetBabystepOffset()/SetAxisLetter().
+	RefreshTuneZOffset(true);
 
 	RefreshTuneToolRows();
 }
@@ -10851,6 +10864,13 @@ namespace UI
 				{
 					babystepOffsetField->SetValue(f);
 				}
+#if DISPLAY_X == 800
+				// RRF pushed a new babystep value (e.g. from DWC, a macro or M290) while TUNE is open.
+				if (currentUiPage == UiPage::StatusTune)
+				{
+					RefreshTuneZOffset(false);
+				}
+#endif
 			}
 		}
 	}
@@ -10869,6 +10889,11 @@ namespace UI
 				else if (l == 'Y') statusObjectYAxis = static_cast<int>(index);
 				if (oldXAxis != statusObjectXAxis || oldYAxis != statusObjectYAxis) statusObjectsDirty = true;
 				RefreshControlMoveHoming();
+				// On first connect the babystep value can arrive before the axis letter.
+				if (l == 'Z' && currentUiPage == UiPage::StatusTune)
+				{
+					RefreshTuneZOffset(false);
+				}
 #endif
 			}
 		}
