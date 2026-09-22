@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/melit/Desktop/MIHA/VORON350ish/CONFIG/SCREEN UI MODERN/PanelDueFirmware-MODERN-v2/build-5i/cmake_install.cmake",
+		"C:/Users/melit/Desktop/MIHA/VORON350ish/CONFIG/SCREEN UI MODERN/PanelDueFirmware-MODERN-v2/build-5i/lib/librrf/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
