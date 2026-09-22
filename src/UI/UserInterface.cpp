@@ -2350,7 +2350,7 @@ static void CreateSetupTabFields(const ColourScheme& colours)
 		{350,170,"BRIGHTNESS",         evSettingsBrightnessOpen},
 		{582,170,"INFO TIMEOUT",       evSettingsInfoTimeoutOpen},
 		{118,240,"ACCENT COLOR",       evSettingsAccentOpen},
-		{350,240,"ALWAYS DIM",         evSettingsAlwaysDimToggle},
+		{350,240,"SCREEN DIMMING",     evSettingsAlwaysDimToggle},
 		{582,240,"BAUD",               evSettingsBaudOpen},
 		{118,310,"TOUCH CALIBR.",      evSettingsTouchOpen},
 		{350,310,"MIRROR DISPLAY",     evInvertX},
