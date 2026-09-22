@@ -74,9 +74,13 @@ UI is devised in to 3 master sections (TABS) on the left vertical rail.
 Duet3d PanelDue version:
 
 v3-5.0
+
 v3-7.0
+
 v3-7.0c
+
 5.0i
+
 7.0i
 
 ## Firmware Downloads
