@@ -4,7 +4,7 @@ This is a fork of the official [Duet 3D PanelDue Firmware](https://github.com/Du
 
 ## About
 
-PanelDue Firmware – Modern UI provides the firmware and interface for PanelDue controllers used with Duet 3D electronics. This fork focuses on updating the PanelDue user experience while retaining the functionality and compatibility of the original project.
+PanelDue Firmware – Modern UI provides new firmware interface for PanelDue controllers used with Duet 3D electronics. This fork focuses on updating the PanelDue user experience while retaining the functionality and compatibility of the original project.
 
 ## UI
 UI follows modern tab design: On the left side top corner we have emergency STOP button Underneath are 3 master tabs and at the bottom left corner is ALERT button shortcut. On the top we have rail with sub tabs that displays tabs that are grouped under each master tab. The rest is content area.
