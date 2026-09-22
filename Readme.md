@@ -113,6 +113,8 @@ v3-7.0c
 | **5.0i** | [Download latest](last%20versions%20compiled/paneldue-5.0i.bin) |
 | **7.0i** | [Download latest](last%20versions%20compiled/paneldue-7.0i.bin) |
 
+Instructions on how to update your panel due can be found on Duet 3D site
+https://docs.duet3d.com/User_manual/RepRapFirmware/Updating_PanelDue
 
 ## Repository status
 
