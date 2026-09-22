@@ -2,6 +2,8 @@
 
 This is a fork of the official [Duet 3D PanelDue Firmware](https://github.com/Duet3D/PanelDueFirmware) with a modernized user interface.
 
+Notice: This interface has been coded by Cloude and ChatGtp. I design the interface mockups and layout and then used LLMs for actual coding. So 100% vibe coded. 
+
 ## About
 
 PanelDue Firmware – Modern UI provides new firmware interface for PanelDue controllers used with Duet 3D electronics. This fork focuses on updating the PanelDue user experience while retaining the functionality and compatibility of the original project.
