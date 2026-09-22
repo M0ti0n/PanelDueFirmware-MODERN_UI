@@ -113,20 +113,6 @@ v3-7.0c
 | **5.0i** | [Download latest](last%20versions%20compiled/paneldue-5.0i.bin) |
 | **7.0i** | [Download latest](last%20versions%20compiled/paneldue-7.0i.bin) |
 
-### Previous builds
-
-Older compiled versions are kept here in case a rollback is needed. (22092026_v1)
-
-| PanelDue model | Firmware |
-| --- | --- |
-| **v3 5.0"** | [Download previous build](last%20versions%20compiled/previous%20ver/paneldue-v3-5.0.bin) |
-| **v3 7.0"** | [Download previous build](last%20versions%20compiled/previous%20ver/paneldue-v3-7.0.bin) |
-| **v3 7.0c** | [Download previous build](last%20versions%20compiled/previous%20ver/paneldue-v3-7.0c.bin) |
-| **5.0i** | [Download previous build](last%20versions%20compiled/previous%20ver/paneldue-5.0i.bin) |
-| **7.0i** | [Download previous build](last%20versions%20compiled/previous%20ver/paneldue-7.0i.bin) |
-
-
-
 
 ## Repository status
 
