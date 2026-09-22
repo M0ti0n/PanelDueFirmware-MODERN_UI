@@ -20,8 +20,7 @@ UI is devised in to 3 master sections (TABS) on the left vertical rail.
 
   ### TOOLS
 ![CONTROL - TOOLS](docs/screenshots/control-tools.png)
-     Lists RRF tools, beds and chambers and shows current heater temperature plus active/standby targets. Tapping targets edits       temperatures, tool headers handle tool selection, and the power tile only turns an active heater off.
-     
+     Lists RRF tools, beds and chambers and shows current heater temperature plus active/standby targets. Tapping targets edits       temperatures, tool headers handle tool selection, and the power tile only turns an active heater off. If there are more than 5 heating elements configured (4 toolhead, bed and chamber heater for example) a second page under tools is created with the buttons to navigate between them shown. First page will in this case hold 4 heater columns and 2 most right columns get pushed to second page.      
      
   ### MOVE
 ![CONTROL - MOVE](docs/screenshots/control-move.png)
@@ -40,7 +39,13 @@ UI is devised in to 3 master sections (TABS) on the left vertical rail.
 
   ### PRINTING
 ![STATUS - PRINTING](docs/screenshots/status-printing.png)
-    Shows the active print at a glance with job name, progress, slicer thumbnail and a fixed 3×3 read-only telemetry grid. The page also exposes layer/time summary plus the pause/resume and abort actions when a print is active.
+    Shows the active print at a glance with job name, progress, slicer thumbnail and a fixed 3×3 read-only telemetry grid. The page also exposes layer/time summary plus the pause/resume and abort actions when a print is active. Two non-tool fans are now identified by their RRF fan names, not by whichever unused fan numbers happen to come first they need to be named like that so paneldue assigns correct tile on printing screen to them.
+
+    
+ FAN_AUX → auxiliary fan
+
+ 
+FAN_CHA → chamber/filter fan
     
   ## TUNE
 ![STATUS - TUNE](docs/screenshots/status-tune.png)
@@ -63,7 +68,7 @@ UI is devised in to 3 master sections (TABS) on the left vertical rail.
     
   ### SETTINGS
 ![SYSTEM - SETTINGS](docs/screenshots/system-settings.png)
-    Collects core PanelDue device settings such as volume, brightness, timeout, accent colour, baud rate, touch calibration and display orientation. The page also exposes feedrate and Z offset defaults, a live free-RAM monitor and the factory-reset action.
+    Collects core PanelDue device settings such as volume, brightness, timeout, accent colour, baud rate, touch calibration and display orientation. The page also exposes feedrate and Z offset defaults, a live free-RAM monitor and the factory-reset action. Screen dimming function will dim the display to 5% after 180s if no touch is detected. On touch it will go back to set brightness and counter will restart, 
 
     
 ## Software Compatibility 
