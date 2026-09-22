@@ -105,13 +105,15 @@ v3-7.0c
 
 ### Latest builds (22092026_v2)
 
-| PanelDue model | Firmware |
+| PanelDue model | Download |
 | --- | --- |
-| **v3 5.0"** | [Download latest](last%20versions%20compiled/paneldue-v3-5.0.bin) |
-| **v3 7.0"** | [Download latest](last%20versions%20compiled/paneldue-v3-7.0.bin) |
-| **v3 7.0c** | [Download latest](last%20versions%20compiled/paneldue-v3-7.0c.bin) |
-| **5.0i** | [Download latest](last%20versions%20compiled/paneldue-5.0i.bin) |
-| **7.0i** | [Download latest](last%20versions%20compiled/paneldue-7.0i.bin) |
+| **v3 5.0"** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3_5_v22092026_2.bin) |
+| **v3 7.0"** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3_7_v22092026_2.bin) |
+| **v3 7.0c** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3_7_C_v22092026_2.bin) |
+| **5.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_5_i_v22092026_2.bin) |
+| **7.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_7_i_v22092026_2.bin) |
+
+
 
 Instructions on how to update your panel due can be found on Duet 3D site
 https://docs.duet3d.com/User_manual/RepRapFirmware/Updating_PanelDue
