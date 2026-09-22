@@ -66,7 +66,9 @@ UI is devised in to 3 master sections (TABS) on the left vertical rail.
     Collects core PanelDue device settings such as volume, brightness, timeout, accent colour, baud rate, touch calibration and display orientation. The page also exposes feedrate and Z offset defaults, a live free-RAM monitor and the factory-reset action.
 
     
+## Software Compatibility 
 
+RRF 3.5.2 onward
 
 
 ## Compatible Hardware
