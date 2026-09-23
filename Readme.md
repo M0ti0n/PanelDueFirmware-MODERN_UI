@@ -44,7 +44,7 @@ Displays up to six RRF macro entries per page, with folder navigation and paging
   ### PRINTING
 ![STATUS - PRINTING](docs/screenshots/status-printing.png)
 
-Shows the active print at a glance with job name, progress, slicer thumbnail and a fixed 3×3 read-only telemetry grid. The page also exposes layer/time summary plus the pause/resume and abort actions when a print is active. Two non-tool fans are now identified by their RRF fan names, not by whichever unused fan numbers happen to come first they need to be named like that so paneldue assigns correct tile on printing screen to them.
+Shows the active print at a glance with job name, progress, slicer thumbnail and a fixed 3×3 read-only telemetry grid. The page also exposes layer/time summary plus the pause/resume and abort actions when a print is active. Two non-tool fans are now identified by their RRF fan names, not by whichever unused fan numbers happen to come first they need to be named like that so paneldue assigns correct tile on printing screen to them. For thumbnail to show up you need to add "220x220/QOI" in Slicer.
 
     
 FAN_AUX → auxiliary fan
