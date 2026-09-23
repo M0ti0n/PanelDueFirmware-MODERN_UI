@@ -21,7 +21,7 @@ UI is devised in to 3 master sections (TABS) on the left vertical rail.
   ### TOOLS
 ![CONTROL - TOOLS](docs/screenshots/control-tools.png)
 
-Lists RRF tools, beds and chambers and shows current heater temperature plus active/standby targets. Tapping targets edits       temperatures, tool headers handle tool selection, and the power tile only turns an active heater off. If there are more than 5 heating elements configured (4 toolhead, bed and chamber heater for example) a second page under tools is created with the buttons to navigate between them shown. First page will in this case hold 4 heater columns and 2 most right columns get pushed to second page.      
+TOOLS lists RRF tools, heating bed, chamber heater and shows current heater temperature plus active/standby targets. Tapping targets edits       temperatures, tool headers handle tool selection, and the power tile only turns an active heater off. If there are more than 5 heating elements configured (4 toolhead, bed and chamber heater for example) a second page under tools is created with the buttons to navigate between them shown. First page will in this case hold 4 heater columns and 2 most right columns get pushed to second page.      
      
   ### MOVE
 ![CONTROL - MOVE](docs/screenshots/control-move.png)
