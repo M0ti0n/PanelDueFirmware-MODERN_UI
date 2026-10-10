@@ -4496,10 +4496,32 @@ static int GetJobStatusBedHeater()
 	return (bed != nullptr) ? static_cast<int>(bed->heater) : -1;
 }
 
+// Chamber temperature from a sensor named "...chamber..." (M308 ... A"Chamber"), used when there is no chamber heater.
+static float jobStatusChamberSensorTemp = 0.0f;
+static uint32_t jobStatusChamberSensorTime = 0;
+static bool jobStatusChamberSensorValid = false;
+static constexpr uint32_t JobStatusChamberSensorStaleMs = 10000;	// polled every 3 s while the PRINTING page is shown
+
+static bool JobStatusChamberSensorFresh()
+{
+	return jobStatusChamberSensorValid && (SystemTick::GetTickCount() - jobStatusChamberSensorTime) <= JobStatusChamberSensorStaleMs;
+}
+
 static int GetJobStatusChamberHeater()
 {
 	OM::Chamber * const chamber = OM::GetFirstChamber();
 	return (chamber != nullptr) ? static_cast<int>(chamber->heater) : -1;
+}
+
+// Show newText in a field fed from the buffer 'shown', but only repaint when the text is different. The PRINTING page
+// refreshes every second and most values do not change that often.
+template<size_t N> static void SetJobStatusText(StaticTextField *field, String<N>& shown, const char *newText)
+{
+	if (field != nullptr && strcmp(shown.c_str(), newText) != 0)
+	{
+		shown.copy(newText);
+		field->SetValue(shown.c_str(), true);
+	}
 }
 
 static const char *JobStatusTileLabel(JobStatusTileType type, String<20>& label)
@@ -4538,8 +4560,9 @@ static void RefreshJobStatusTile(unsigned int slot)
 		return;
 	}
 	const JobStatusTileType type = jobStatusTiles[slot];
-	jobStatusLabels[slot]->SetValue(JobStatusTileLabel(type, jobStatusLabelText[slot]));
-	String<24>& value = jobStatusValueText[slot];
+	String<20> label;
+	SetJobStatusText(jobStatusLabels[slot], jobStatusLabelText[slot], JobStatusTileLabel(type, label));
+	String<24> value;
 	value.copy("---");
 
 	int index = -1;
@@ -4568,6 +4591,10 @@ static void RefreshJobStatusTile(unsigned int slot)
 		if (index >= 0 && index < static_cast<int>(JobStatusMaxHeaters) && jobStatusHeaterValid[index])
 		{
 			value.printf("%.1f" DEGREE_SYMBOL "C", (double)jobStatusHeaterTemps[index]);
+		}
+		else if (index < 0 && JobStatusChamberSensorFresh())
+		{
+			value.printf("%.1f" DEGREE_SYMBOL "C", (double)jobStatusChamberSensorTemp);		// no chamber heater: sensor only
 		}
 		break;
 	case JobStatusTileType::FanPart:
@@ -4621,7 +4648,7 @@ static void RefreshJobStatusTile(unsigned int slot)
 	jobStatusCards[slot]->SetFillColour(cardColour);
 	jobStatusLabels[slot]->SetColours(muted, cardColour);
 	jobStatusValues[slot]->SetColours(text, cardColour);
-	jobStatusValues[slot]->SetValue(value.c_str());
+	SetJobStatusText(jobStatusValues[slot], jobStatusValueText[slot], value.c_str());
 }
 
 static void RefreshJobStatusTiles()
@@ -4645,36 +4672,27 @@ static void RefreshJobStatusTilesByType(JobStatusTileType type)
 
 static void RefreshJobStatusHeader()
 {
-	if (jobStatusNameField != nullptr)
+	SetJobStatusText(jobStatusNameField, jobStatusNameText, printingFile.IsEmpty() ? "No active print" : printingFile.c_str());
+
+	String<16> text;
+	text.printf("%u%%", constrain<unsigned int>(jobStatusProgress, 0, 100));
+	SetJobStatusText(jobStatusProgressField, jobStatusProgressText, text.c_str());
+
+	if (jobStatusNumLayers != 0)
 	{
-		jobStatusNameText.copy(printingFile.IsEmpty() ? "No active print" : printingFile.c_str());
-		jobStatusNameField->SetValue(jobStatusNameText.c_str());
+		text.printf("%u / %u", jobStatusLayer, jobStatusNumLayers);
 	}
-	if (jobStatusProgressField != nullptr)
+	else
 	{
-		jobStatusProgressText.printf("%u%%", constrain<unsigned int>(jobStatusProgress, 0, 100));
-		jobStatusProgressField->SetValue(jobStatusProgressText.c_str());
+		text.printf("%u / ---", jobStatusLayer);
 	}
-	if (jobStatusLayersField != nullptr)
-	{
-		if (jobStatusNumLayers != 0)
-		{
-			jobStatusLayersText.printf("%u / %u", jobStatusLayer, jobStatusNumLayers);
-		}
-		else
-		{
-			jobStatusLayersText.printf("%u / ---", jobStatusLayer);
-		}
-		jobStatusLayersField->SetValue(jobStatusLayersText.c_str());
-	}
-	if (jobStatusTimeField != nullptr)
-	{
-		const uint32_t hours = jobStatusDuration / 3600;
-		const uint32_t mins = (jobStatusDuration / 60) % 60;
-		const uint32_t secs = jobStatusDuration % 60;
-		jobStatusTimeText.printf("%lu : %02lu : %02lu", (unsigned long)hours, (unsigned long)mins, (unsigned long)secs);
-		jobStatusTimeField->SetValue(jobStatusTimeText.c_str());
-	}
+	SetJobStatusText(jobStatusLayersField, jobStatusLayersText, text.c_str());
+
+	const uint32_t hours = jobStatusDuration / 3600;
+	const uint32_t mins = (jobStatusDuration / 60) % 60;
+	const uint32_t secs = jobStatusDuration % 60;
+	text.printf("%lu : %02lu : %02lu", (unsigned long)hours, (unsigned long)mins, (unsigned long)secs);
+	SetJobStatusText(jobStatusTimeField, jobStatusTimeText, text.c_str());
 }
 
 static void RefreshJobStatusActions()
@@ -7113,6 +7131,31 @@ namespace UI
 		{
 			keyboardIsDisplayed = false;
 		}
+	}
+
+	// True when the PRINTING page needs the chamber sensor fallback: it is showing and there is no chamber heater
+	bool WantsChamberSensor()
+	{
+#if DISPLAY_X == 800
+		return currentUiPage == UiPage::StatusJobStatus && GetJobStatusChamberHeater() < 0;
+#else
+		return false;
+#endif
+	}
+
+	void SetChamberSensorReading(float temperature, bool valid)
+	{
+#if DISPLAY_X == 800
+		jobStatusChamberSensorTemp = temperature;
+		jobStatusChamberSensorValid = valid;
+		jobStatusChamberSensorTime = SystemTick::GetTickCount();
+		if (currentUiPage == UiPage::StatusJobStatus)
+		{
+			RefreshJobStatusTilesByType(JobStatusTileType::ChamberTemp);
+		}
+#else
+		UNUSED(temperature); UNUSED(valid);
+#endif
 	}
 
 	// Return true if polling should be performed

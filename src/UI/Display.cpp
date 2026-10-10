@@ -583,17 +583,14 @@ void FieldWithText::Refresh(bool full, PixelNumber xOffset, PixelNumber yOffset)
 		}
 		else
 		{
-			lcd.clearToMargin();
+			// Centred or right aligned. The text is printed with an opaque background, so only the gaps to its left
+			// and right need clearing. Clearing the whole row first (as before) made the value vanish for a moment
+			// on every update, which showed as blinking on pages that refresh every second.
 			PixelNumber spare = textWidth - actualWidth;
+			PixelNumber textX;
 			if (align == TextAlignment::Centre)
 			{
-				const PixelNumber textX = xOffset + spare/2;
-				lcd.setTextPos(textX, yOffset, xOffset + textWidth);
-				PrintText();
-				if (underlined)
-				{
-					lcd.drawLine(textX, underlineY, textX + actualWidth - 1, underlineY);
-				}
+				textX = xOffset + spare/2;
 			}
 			else
 			{
@@ -606,13 +603,16 @@ void FieldWithText::Refresh(bool full, PixelNumber xOffset, PixelNumber yOffset)
 				{
 					spare -= 3;
 				}
-				const PixelNumber textX = xOffset + spare;
-				lcd.setTextPos(textX, yOffset, xOffset + textWidth);
-				PrintText();
-				if (underlined)
-				{
-					lcd.drawLine(textX, underlineY, textX + actualWidth, underlineY);
-				}
+				textX = xOffset + spare;
+			}
+			lcd.setTextPos(xOffset, yOffset, textX);			// gap to the left of the text
+			lcd.clearToMargin();
+			lcd.setTextPos(textX, yOffset, xOffset + textWidth);
+			PrintText();
+			lcd.clearToMargin();								// gap to the right of the text
+			if (underlined)
+			{
+				lcd.drawLine(textX, underlineY, textX + actualWidth - ((align == TextAlignment::Centre) ? 1 : 0), underlineY);
 			}
 		}
 		changed = false;

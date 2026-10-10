@@ -52,6 +52,8 @@ namespace UI
 	extern void SetSimulatedTime(uint32_t simulatedTime);
 	extern bool IsSetupTab();
 	extern bool IsJobStatusPageShown();
+	extern bool WantsChamberSensor();
+	extern void SetChamberSensorReading(float temperature, bool valid);
 	extern void Tick();
 	extern void Spin();
 	extern void PrintStarted();
