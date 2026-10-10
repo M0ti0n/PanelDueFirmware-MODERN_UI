@@ -255,6 +255,7 @@ enum ReceivedDataEvent
 	rcvOMKeyMoveExtruders,
 	rcvOMKeyLiveJobLayer,
 	rcvOMKeyLiveExtrusionRate,
+	rcvOMKeyLiveChamberSensor,
 	rcvOMKeyNetwork,
 	rcvOMKeyReply,
 	rcvOMKeyScanner,
@@ -334,6 +335,9 @@ enum ReceivedDataEvent
 
 	// Keys for sensors response
 	rcvSensorsProbeValue,
+	rcvSensorsAnalogLastReading,
+	rcvSensorsAnalogName,
+	rcvSensorsAnalogState,
 
 	// Keys for seqs response
 	rcvSeqsBoards,
@@ -353,6 +357,7 @@ enum ReceivedDataEvent
 	rcvSeqsVolumes,
 	rcvSeqsLiveJobLayer,		// not sequence numbers from RRF: used to schedule the extra live requests below
 	rcvSeqsLiveExtrusionRate,
+	rcvSeqsLiveChamberSensor,
 
 	// Keys for spindles respons
 	rcvSpindlesActive,
@@ -492,6 +497,11 @@ static FieldTableEntry fieldTable[] =
 	// M409 K"sensors" response
 	{ rcvSensorsProbeValue,				"sensors:probes^:value^" },
 
+	// M409 K"sensors.analog" response: a chamber temperature sensor without a chamber heater (see the seqs table)
+	{ rcvSensorsAnalogLastReading,		"sensors.analog^:lastReading" },
+	{ rcvSensorsAnalogName,				"sensors.analog^:name" },
+	{ rcvSensorsAnalogState,			"sensors.analog^:state" },
+
 	// M409 K"seqs" response
 	{ rcvSeqsBoards,					"seqs:boards" },
 	{ rcvSeqsDirectories,				"seqs:directories" },
@@ -621,6 +631,10 @@ static struct Seq {
 #endif
 #if FETCH_HEAT
 	{ .event = rcvOMKeyHeat, .seqid = rcvSeqsHeat, .lastSeq = 0, .state = SeqStateInit, .key = "heat", .flags = "vp" },
+	// A temperature sensor whose name contains "chamber" (M308 ... A"Chamber"), shown on the PRINTING page when there is no
+	// chamber heater. Asked for once at start-up, then by PollExtraLiveValues() only while it is needed. The fields come in the
+	// order lastReading, name, ..., state; no verbose flag is needed for them.
+	{ .event = rcvOMKeyLiveChamberSensor, .seqid = rcvSeqsLiveChamberSensor, .lastSeq = 0, .state = SeqStateInit, .key = "sensors.analog", .flags = "" },
 #endif
 #if FETCH_TOOLS
 	{ .event = rcvOMKeyTools, .seqid = rcvSeqsTools, .lastSeq = 0, .state = SeqStateInit, .key = "tools", .flags = "vp" },
@@ -724,8 +738,9 @@ static void UpdateSeq(const ReceivedDataEvent seqid, int32_t val)
 // Ask again for the single live values below while a job is running (see the seqs table), and only while the PRINTING
 // page is showing because nothing else displays them. The extrusion rate is skipped whenever the regular live
 // request has delivered it recently.
-static uint32_t lastLayerPoll = 0, lastExtrusionPoll = 0;
+static uint32_t lastLayerPoll = 0, lastExtrusionPoll = 0, lastChamberSensorPoll = 0;
 static const uint32_t layerPollInterval = 3000, extrusionPollInterval = 1500, regularSampleFreshTime = 2000;
+static const uint32_t chamberSensorPollInterval = 3000;
 
 static void PollExtraLiveValues(uint32_t now)
 {
@@ -749,6 +764,12 @@ static void PollExtraLiveValues(uint32_t now)
 		{
 			seqs[i].state = SeqStateUpdate;
 			lastExtrusionPoll = now;
+		}
+		else if (seqs[i].seqid == rcvSeqsLiveChamberSensor && now - lastChamberSensorPoll >= chamberSensorPollInterval
+				 && UI::WantsChamberSensor())
+		{
+			seqs[i].state = SeqStateUpdate;
+			lastChamberSensorPoll = now;
 		}
 	}
 }
@@ -1257,6 +1278,25 @@ void HandleOutOfBufferResponse()
 	}
 	lastOutOfBufferResponse = now;
 	outOfBuffers = true;
+}
+
+// Chamber sensor fallback (see rcvSensorsAnalog*)
+static float chamberSensorPendingReading = 0.0f;
+static size_t chamberSensorPendingIndex = 0;
+static size_t chamberSensorMatchIndex = (size_t)-1;
+static bool chamberSensorPendingValid = false;
+
+static bool StringContainsIgnoreCase(const char *haystack, const char *needle)
+{
+	const size_t n = strlen(needle);
+	for (; *haystack != 0; ++haystack)
+	{
+		if (strncasecmp(haystack, needle, n) == 0)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 // Public functions called by the SerialIo module
@@ -1886,6 +1926,29 @@ static void ProcessReceivedValue(StringRef id, const char data[], const size_t i
 		{
 			if (indices[0] == 0 && indices[1] == 0)			// currently we only handle one probe with one value
 			UI::UpdateZProbe(data);
+		}
+		break;
+
+	// Chamber sensor fallback. lastReading arrives before name in each sensor object, so keep it until the name is known.
+	case rcvSensorsAnalogLastReading:
+		chamberSensorPendingValid = GetFloat(data, chamberSensorPendingReading);
+		chamberSensorPendingIndex = indices[0];
+		break;
+
+	case rcvSensorsAnalogName:
+		chamberSensorMatchIndex = (size_t)-1;
+		if (chamberSensorPendingValid && chamberSensorPendingIndex == indices[0] && StringContainsIgnoreCase(data, "chamber"))
+		{
+			chamberSensorMatchIndex = indices[0];
+			UI::SetChamberSensorReading(chamberSensorPendingReading, true);
+		}
+		chamberSensorPendingValid = false;
+		break;
+
+	case rcvSensorsAnalogState:
+		if (chamberSensorMatchIndex == indices[0] && strcasecmp(data, "ok") != 0)
+		{
+			UI::SetChamberSensorReading(0.0f, false);		// sensor fault: show "---" rather than a meaningless reading
 		}
 		break;
 
