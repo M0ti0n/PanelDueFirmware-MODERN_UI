@@ -1243,7 +1243,7 @@ static void ChangeHeaterCombineType()
 // Don't update it if the value hasn't changed, because that makes the display flicker unnecessarily
 static void UpdateField(IntegerButton *f, int val)
 {
-	if (f != fieldBeingAdjusted.GetButton() && f->GetValue() != val)
+	if (f != nullptr && f != fieldBeingAdjusted.GetButton() && f->GetValue() != val)
 	{
 		f->SetValue(val);
 	}
@@ -1711,6 +1711,11 @@ static void CreateBabystepPopup(const ColourScheme& colours)
 // Create the grid of heater icons and temperatures
 static void CreateTemperatureGrid(const ColourScheme& colours)
 {
+#if DISPLAY_X == 800
+	// v3 cleanup: the legacy heater grid (STOP button, debug field, current/active/standby rows) is not built on
+	// 800x480 – CONTROL > TOOLS replaces it. All pointers stay nullptr and every user checks for that.
+	UNUSED(colours);
+#else
 	// Add the emergency stop button
 	DisplayField::SetDefaultColours(colours.stopButtonTextColour, colours.stopButtonBackColour);
 	mgr.AddField(new TextButton(row2, margin, bedColumn - fieldSpacing - margin - 16, strings->stop, evEmergencyStop));
@@ -1758,6 +1763,7 @@ static void CreateTemperatureGrid(const ColourScheme& colours)
 		standbyTemps[i] = ib;
 		mgr.AddField(ib);
 	}
+#endif
 }
 
 // Create the extra fields for the Control tab
@@ -7554,7 +7560,10 @@ namespace UI
 			const size_t count = heaterSlots.Size();
 			for (size_t i = 0; i < count; ++i)
 			{
-				currentTemps[heaterSlots[i]]->SetValue(fval);
+				if (currentTemps[heaterSlots[i]] != nullptr)
+				{
+					currentTemps[heaterSlots[i]]->SetValue(fval);
+				}
 			}
 
 			heaterSlots.Clear();
@@ -7600,14 +7609,20 @@ namespace UI
 			for (size_t i = 0; i < count; ++i)
 			{
 				const size_t slot = heaterSlots[i];
-				currentTemps[slot]->SetColours(foregroundColour, backgroundColour);
+				if (currentTemps[slot] != nullptr)
+				{
+					currentTemps[slot]->SetColours(foregroundColour, backgroundColour);
+				}
 
 				// If it's a bed or a chamber we update colors for the tool button as well
 				OM::IterateBedsWhile([&heaterIndex, &status, &foregroundColour, &bedOrChamberBgColor, &slot](OM::Bed*& bed, size_t) {
 					if (bed->heater == (int)heaterIndex)
 					{
 						bed->heaterStatus = status;
-						toolButtons[slot]->SetColours(foregroundColour, bedOrChamberBgColor);
+						if (toolButtons[slot] != nullptr)
+						{
+							toolButtons[slot]->SetColours(foregroundColour, bedOrChamberBgColor);
+						}
 						return false;	// This will lead to getting out of the iteration on first hit - is that really what we want?
 					}
 					return true;
@@ -7616,7 +7631,10 @@ namespace UI
 					if (chamber->heater == (int)heaterIndex)
 					{
 						chamber->heaterStatus = status;
-						toolButtons[slot]->SetColours(foregroundColour, bedOrChamberBgColor);
+						if (toolButtons[slot] != nullptr)
+						{
+							toolButtons[slot]->SetColours(foregroundColour, bedOrChamberBgColor);
+						}
 						return false;	// This will lead to getting out of the iteration on first hit - is that really what we want?
 					}
 					return true;
@@ -11232,6 +11250,10 @@ namespace UI
 						break;
 					}
 					const auto slot = bed->slot;
+					if (activeTemps[slot] == nullptr)
+					{
+						break;
+					}
 					if (bed->heaterStatus == OM::HeaterStatus::active)			// if bed is active
 					{
 						SerialIo::Sendf("M144 P%d\n", bedIndex);
@@ -11252,6 +11274,10 @@ namespace UI
 						break;
 					}
 					const auto slot = chamber->slot;
+					if (activeTemps[slot] == nullptr)
+					{
+						break;
+					}
 					SerialIo::Sendf("M141 P%d S%d\n",
 							chamberIndex,
 							(chamber->heaterStatus == OM::HeaterStatus::active ? -274 : activeTemps[slot]->GetValue()));
@@ -12174,8 +12200,14 @@ namespace UI
 	{
 		for (size_t i = 0; i < numToolColsUsed; ++i)
 		{
-			toolButtons[i]->SetColours(colours->buttonTextColour, colours->buttonImageBackColour);
-			currentTemps[i]->SetColours(colours->infoTextColour, colours->defaultBackColour);
+			if (toolButtons[i] != nullptr)
+			{
+				toolButtons[i]->SetColours(colours->buttonTextColour, colours->buttonImageBackColour);
+			}
+			if (currentTemps[i] != nullptr)
+			{
+				currentTemps[i]->SetColours(colours->infoTextColour, colours->defaultBackColour);
+			}
 		}
 	}
 
@@ -12192,10 +12224,16 @@ namespace UI
 		mgr.Show(activeTemps[slot], activeEvent != evNull);
 		mgr.Show(standbyTemps[slot], standbyEvent != evNull);
 
-		activeTemps[slot]->SetEvent(activeEvent, activeEventValue);
-		activeTemps[slot]->SetValue(0);
-		standbyTemps[slot]->SetEvent(standbyEvent, standbyEventValue);
-		standbyTemps[slot]->SetValue(0);
+		if (activeTemps[slot] != nullptr)
+		{
+			activeTemps[slot]->SetEvent(activeEvent, activeEventValue);
+			activeTemps[slot]->SetValue(0);
+		}
+		if (standbyTemps[slot] != nullptr)
+		{
+			standbyTemps[slot]->SetEvent(standbyEvent, standbyEventValue);
+			standbyTemps[slot]->SetValue(0);
+		}
 	}
 
 	size_t AddBedOrChamber(OM::BedOrChamber *bedOrChamber, size_t &slot, const bool isBed = true) {
@@ -12213,10 +12251,13 @@ namespace UI
 					bedOrChamber->index
 					);
 			mgr.Show(extrusionFactors[slot], false);
-			toolButtons[slot]->SetEvent(isBed ? evSelectBed : evSelectChamber, bedOrChamber->index);
-			toolButtons[slot]->SetIcon(isBed ? IconBed : IconChamber);
-			toolButtons[slot]->SetIntVal(bedOrChamber->index);
-			toolButtons[slot]->SetPrintText(count > 1);
+			if (toolButtons[slot] != nullptr)
+			{
+				toolButtons[slot]->SetEvent(isBed ? evSelectBed : evSelectChamber, bedOrChamber->index);
+				toolButtons[slot]->SetIcon(isBed ? IconBed : IconChamber);
+				toolButtons[slot]->SetIntVal(bedOrChamber->index);
+				toolButtons[slot]->SetPrintText(count > 1);
+			}
 
 			++slot;
 		}
@@ -12241,10 +12282,13 @@ namespace UI
 			const bool hasExtruder = tool->extruders.IsNonEmpty();
 			if (slot < MaxSlots)
 			{
-				toolButtons[slot]->SetEvent(evSelectHead, tool->index);
-				toolButtons[slot]->SetIntVal(tool->index);
-				toolButtons[slot]->SetPrintText(true);
-				toolButtons[slot]->SetIcon(hasSpindle ? IconSpindle : IconNozzle);
+				if (toolButtons[slot] != nullptr)
+				{
+					toolButtons[slot]->SetEvent(evSelectHead, tool->index);
+					toolButtons[slot]->SetIntVal(tool->index);
+					toolButtons[slot]->SetPrintText(true);
+					toolButtons[slot]->SetIcon(hasSpindle ? IconSpindle : IconNozzle);
+				}
 				mgr.Show(toolButtons[slot], true);
 
 				mgr.Show(extrusionFactors[slot], hasExtruder);
@@ -12370,7 +12414,7 @@ namespace UI
 		}
 
 		OM::IterateToolsWhile([spindle](OM::Tool*& tool, size_t) {
-			if (tool->slot < MaxSlots && tool->spindle == spindle)
+			if (tool->slot < MaxSlots && tool->spindle == spindle && activeTemps[tool->slot] != nullptr)
 			{
 				activeTemps[tool->slot]->SetValue(tool->spindle->active);
 			}
@@ -12381,7 +12425,7 @@ namespace UI
 	void UpdateSpindleCurrent(OM::Spindle* spindle)
 	{
 		OM::IterateToolsWhile([spindle](OM::Tool*& tool, size_t) {
-			if (tool->slot < MaxSlots && tool->spindle == spindle)
+			if (tool->slot < MaxSlots && tool->spindle == spindle && currentTemps[tool->slot] != nullptr)
 			{
 				const OM::SpindleState state = spindle->state;
 				currentTemps[tool->slot]->SetValue(
@@ -12492,7 +12536,7 @@ namespace UI
 		Colour c = /*(status == OM::ToolStatus::standby) ? colours->standbyBackColour : */
 					(status == OM::ToolStatus::active) ? colours->activeBackColour
 					: colours->buttonImageBackColour;
-		if (tool->slot < MaxSlots)
+		if (tool->slot < MaxSlots && toolButtons[tool->slot] != nullptr)
 		{
 			toolButtons[tool->slot]->SetColours(colours->buttonTextColour, c);
 		}

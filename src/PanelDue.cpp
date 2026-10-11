@@ -2985,7 +2985,10 @@ int main(void)
 	// Hide all tools and heater related columns initially
 	UI::AllToolsSeen();
 
-	debugField->Show(false);					// show the debug field only if debugging is enabled
+	if (debugField != nullptr)
+	{
+		debugField->Show(false);				// show the debug field only if debugging is enabled
+	}
 
 	// Display the Control tab. This also refreshes the display.
 	UI::ShowDefaultPage();
