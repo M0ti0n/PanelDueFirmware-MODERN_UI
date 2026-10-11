@@ -210,6 +210,132 @@ RRF has no built-in endless spool, but it works with this panel if you implement
 
 The panel needs nothing extra: it reads each tool's extruder from RRF, so after the switch the FILAMENT MANAGEMENT page shows the backup lane's material, runout state and job filament under the same tool.
 
+# Endless spool – macro template for RepRapFirmware
+
+When a spool runs out during a print, the printer switches to a backup spool by itself and
+the print continues. RRF has no built-in endless spool; these macros add it.
+
+> **Status: template, not yet tested on a real printer.** Read it, adjust the settings,
+> and test with a short print and a cut filament end before trusting it with a long job.
+> Please report results (and fixes) on the Discord or as a GitHub issue.
+
+## Contents
+- [Which printers this is for](#which-printers-this-is-for)
+- [How it works](#how-it-works)
+- [Files](#files)
+- [Installation](#installation)
+- [Settings](#settings)
+- [Testing](#testing)
+- [Limitations](#limitations)
+- [With the PanelDue Modern UI](#with-the-paneldue-modern-ui)
+
+## Which printers this is for
+Printers where **every spool (lane) has its own extruder drive** and all lanes feed **one hotend**:
+
+- Y-splitter with one Bowden extruder per spool
+- multi-input hotends (e.g. 2-in-1-out, 4-in-1-out)
+- MMUs built from one extruder drive per lane
+
+**Not covered:** tool changers, IDEX, INDX and other multi-toolhead printers (each head has its
+own heater, offsets and dock – far too printer-specific for a template), and MMUs with one
+shared drive and a selector (e.g. ERCF/Tradrack style), where lane switching lives in your own
+MMU macros.
+
+## How it works
+1. A filament monitor reports a runout. RRF (3.4+) runs `filament-error.g` with the extruder
+   number in `D` – **without pausing**.
+2. `filament-error.g` checks that a backup lane is set and (if it has its own monitor) has
+   filament. If not, it pauses the print as usual.
+3. `endless-spool/swap.g`:
+   1. saves the position, lifts Z and parks
+   2. pulls the empty lane back past the merge point
+   3. points the active tool at the backup drive (`M563`), keeping its heater, fan, offsets,
+      temperatures, pressure advance and extrusion factor
+   4. loads and purges the backup lane
+   5. returns to the saved position and the print continues
+4. Every later `T0` (etc.) in the G-code now uses the backup drive.
+5. `endless-spool/reset.g` (from `stop.g` / `cancel.g`) puts the tools back on their own drives.
+
+If the backup lane runs out too, its own backup is used. After as many swaps as there are
+drives, or when there is no backup, the print pauses.
+
+## Files
+Copy the `sys` folder to the printer's `0:/sys`:
+
+| File | Purpose |
+|---|---|
+| `sys/filament-error.g` | called by RRF on a filament monitor error; decides: swap or pause |
+| `sys/endless-spool/settings.g` | **your settings** (backup lanes, distances, park position) |
+| `sys/endless-spool/swap.g` | does the swap |
+| `sys/endless-spool/reset.g` | puts the tools back on their home drives |
+
+If you already have a `filament-error.g`, merge it by hand.
+
+## Installation
+1. Copy the files (see above).
+2. Edit `sys/endless-spool/settings.g`.
+3. Add to the **end** of `config.g` (after your `M563` tool definitions and `M591` monitors):
+   ```
+   M98 P"endless-spool/settings.g"
+   ```
+4. Add to `stop.g` **and** `cancel.g`:
+   ```
+   M98 P"endless-spool/reset.g"
+   ```
+5. Hardware requirements:
+   - **one filament monitor per lane** (`M591 D0 …`, `M591 D1 …`), placed **before** that lane's
+     extruder drive, so the drive still grips the filament end when the runout is detected.
+     A single sensor after the splitter cannot tell which lane ran out.
+   - a place to purge at the park position (bucket, or purge into the air and wipe).
+
+## Settings
+All in `sys/endless-spool/settings.g`:
+
+| Setting | Meaning |
+|---|---|
+| `enabled` | `false` = plain pause on runout |
+| `backup` | backup lane per extruder drive, e.g. `{1, 2, 0}`; `-1` = no backup |
+| `homeDrive` | drive each tool normally uses (as in your `M563` lines), e.g. `{0, 1, 2}` |
+| `unloadDist` | how far to pull the empty lane back – must clear the splitter / merge point |
+| `loadDist` | fast load distance for the backup lane, up to just before the nozzle |
+| `purgeDist` | slow purge after loading |
+| `unloadFeed`, `loadFeed`, `purgeFeed` | speeds in mm/min |
+| `parkX`, `parkY` | where to wait during the swap (machine coordinates) |
+| `zLift` | Z lift before moving away from the print |
+| `travelFeed` | travel speed in mm/min |
+
+After editing, run `M98 P"endless-spool/settings.g"` or restart.
+
+## Testing
+Do this before a real print:
+
+1. **Without printing:** select the tool, heat it, and check that `unloadDist` really pulls the
+   filament back past the splitter, and that `loadDist` + `purgeDist` brings the backup lane to
+   the nozzle and extrudes cleanly.
+2. **Short test print:** start a small print, then cut or pull the filament of the active lane
+   before its sensor. Watch that the head parks, the old lane retracts, the new lane loads and
+   purges, and the print continues at the same place.
+3. **After the print** (or cancel): check with `M409 K"tools"` that the tool is back on its
+   home drive.
+
+Things in this template that depend on RRF behaviour and must be confirmed on a real printer:
+- `filament-error.g` must run in step with the print (between moves). If the head moves while
+  the print also moves, change the start of `swap.g` to pause first (`M25`).
+- `M563` redefining an existing tool (done while no tool is selected, with `T-1 P0`).
+
+## Limitations
+- Tools with **one heater and one part cooling fan** are kept as they are; extra heaters or fans
+  on the same tool are not carried over by the redefinition.
+- If the slicer writes `M572 D…` or `M221 D…` for a drive number later in the file, that still
+  targets the original drive.
+- The empty lane's leftover filament stays in that lane; remove it by hand after the print.
+- Needs RRF **3.4 or newer** (3.5.2+ recommended).
+
+## With the PanelDue Modern UI
+Nothing extra is needed. The FILAMENT MANAGEMENT page reads each tool's extruder from RRF,
+so after a swap the tool's column shows the backup lane's material, runout state and job
+filament. The swap message (`M291`) appears on the panel.
+
 
 ## SYSTEM
 
