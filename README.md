@@ -388,7 +388,7 @@ v3-7.0c
 
 | File | Download |
 | --- | --- |
-| **Endless spool macros** (RRF 3.4+, untested template – see [Endless spool](#endless-spool)) | [Download](last%20versions%20compiled/ENDLESS%20SPOOL/endless-spool-template.zip) |
+| **Endless spool macros** (RRF 3.5+, untested template – see [Endless spool](#endless-spool)) | [Download](last%20versions%20compiled/ENDLESS%20SPOOL/endless-spool-template.zip) |
 
 
 
