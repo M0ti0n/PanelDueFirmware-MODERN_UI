@@ -114,6 +114,11 @@ OBJECT lists object-cancellation targets alongside a live top-view placement map
 
 ## FILAMENT MANAGEMENT
 
+![FILAMENT MANAGEMENT](docs/screenshots/filament-rail-preview.png)
+![FILAMENT - material popup](docs/screenshots/filament-popup-page1.png)
+![FILAMENT - colour popup](docs/screenshots/color-popup-page2.png)
+![FILAMENT - 64 colour palette](docs/screenshots/color-palette-64.png)
+
 **[Filament icon – three lanes into a nozzle]** FILAMENT MANAGEMENT shows every tool as a column: material, colour, runout state and how much filament the current job needs from it. It works for multi-tool printers and for MMUs.
 
 <!-- ![FILAMENT MANAGEMENT](docs/screenshots/filament-management.png) -->
