@@ -384,6 +384,12 @@ v3-7.0c
 | **5.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_5.0-i_v11102026_V2.bin) |
 | **7.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_7.0-i_v11102026_V2.bin) |
 
+### Endless spool macro template
+
+| File | Download |
+| --- | --- |
+| **Endless spool macros** (RRF 3.4+, untested template – see [Endless spool](#endless-spool)) | [Download](last%20versions%20compiled/ENDLESS%20SPOOL/endless-spool-template.zip) |
+
 
 
 Instructions on how to update your PanelDue can be found on the Duet3D site:
