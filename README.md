@@ -248,15 +248,15 @@ v3-7.0c
 ## Firmware Downloads
 
 
-### Latest builds (22092026_v2)
+### Latest builds (v11102026_v2)
 
 | PanelDue model | Download |
 | --- | --- |
-| **v3 5.0"** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3_5_v22092026_2.bin) |
-| **v3 7.0"** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3_7_v22092026_2.bin) |
-| **v3 7.0c** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3_7_C_v22092026_2.bin) |
-| **5.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_5_i_v22092026_2.bin) |
-| **7.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_7_i_v22092026_2.bin) |
+| **v3 5.0"** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3-5.0_v11102026_V2.bin) |
+| **v3 7.0"** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3-7.0_v11102026_V2.bin) |
+| **v3 7.0c** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3-7.0-c_v11102026_V2.bin) |
+| **5.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_5.0-i_v11102026_V2.bin) |
+| **7.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_7.0-i_v11102026_V2.bin) |
 
 
 
