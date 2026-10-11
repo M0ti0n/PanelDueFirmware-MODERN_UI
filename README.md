@@ -43,6 +43,8 @@ Notice: This interface has been coded by Claude and ChatGPT. I design the interf
 
 PanelDue Firmware – Modern UI provides new firmware interface for PanelDue controllers used with Duet 3D electronics. This fork focuses on updating the PanelDue user experience while retaining the functionality and compatibility of the original project.
 
+V2 introduced multi color/ material manegment TAB. ALETR button was removed to accommodate multi material/ color TAB
+
 ## UI
 UI follows modern tab design: on the left side in the top corner we have the emergency STOP button. Underneath are 4 master tabs: CONTROL, STATUS, FILAMENT MANAGEMENT and, at the bottom, SYSTEM. On the top we have a rail with sub tabs that displays the tabs grouped under each master tab. The rest is content area.
 
@@ -96,6 +98,14 @@ M106 P2 C"FAN_AUX" H0 L0.8 T35:100
 ```
 For thermostatic fans (configured with `H` and `T`) the tile shows the fan's real speed.
 
+CHAMBER tile:
+
+- **Chamber heater:** if a chamber heater is configured with `M141 P0 H#`, the tile shows
+  its temperature (coloured by heater state, like the tool and bed heaters).
+- **Sensor only:** without a chamber heater, the tile shows any temperature sensor whose
+  name contains "chamber" (`M308 ... A"Chamber"`).
+- Otherwise the tile shows `---`.
+
   ### TUNE
 ![STATUS - TUNE](docs/screenshots/status-tune.png)
 
@@ -104,7 +114,7 @@ TUNE provides live print adjustments for speed, AUX FAN (FAN_AUX) / CHAMBER FAN 
   ### JOB
 ![STATUS - JOB](docs/screenshots/status-job.png)
 
-JOB displays the printable file list with six rows per page, optional storage-volume selection and page navigation on the right. Selecting a job opens the print-start pop up window, while directories are navigated through the same list view.
+JOB displays the printable file list with six rows per page, optional storage-volume selection and page navigation on the right. Selecting a job opens the print-start pop up window, while directories are navigated through the same list view. It can store up to 72 jobs. 
 
   ### OBJECT
 ![STATUS - OBJECT](docs/screenshots/status-object.png)
