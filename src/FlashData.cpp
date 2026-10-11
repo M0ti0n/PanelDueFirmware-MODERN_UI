@@ -1,4 +1,5 @@
 #include "FlashData.hpp"
+#include <cstring>
 
 #include "Hardware/Buzzer.hpp"
 #include "UI/UserInterface.hpp"
@@ -46,7 +47,10 @@ bool FlashData::operator==(const FlashData& other)
 		&& feedrate == other.feedrate
 		&& heaterCombineType == other.heaterCombineType
 		&& logLevel == other.logLevel
-		&& accentColour == other.accentColour;
+		&& accentColour == other.accentColour
+		&& filamentMode == other.filamentMode
+		&& memcmp(slotColour, other.slotColour, sizeof(slotColour)) == 0
+		&& memcmp(slotMaterial, other.slotMaterial, sizeof(slotMaterial)) == 0;
 }
 
 void FlashData::SetDefaults()
@@ -70,6 +74,9 @@ void FlashData::SetDefaults()
 	heaterCombineType = HeaterCombineType::notCombined;
 	logLevel = MessageLog::LogLevel::Normal;
 	accentColour = 0;
+	filamentMode = 0;									// 0 = not set (values are stored + 1)
+	memset(slotColour, 0, sizeof(slotColour));
+	memset(slotMaterial, 0, sizeof(slotMaterial));
 	magic = magicVal;
 }
 

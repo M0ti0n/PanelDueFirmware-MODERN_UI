@@ -53,7 +53,9 @@ enum class UiPage : uint8_t
 	StatusObjects,
 
     SystemConsole,
-    SystemSettings
+    SystemSettings,
+
+	FilamentManagement
 };
 
 class ButtonBase;
@@ -407,6 +409,7 @@ public:
 	void SetBorderVisible(bool visible);
 	void SetBorderColour(Colour colour);
 	void SetFillColour(Colour colour);
+	void SetHeight(PixelNumber ph) { if (height != ph) { height = ph; changed = true; } }
 	void Refresh(bool full, PixelNumber xOffset, PixelNumber yOffset) override;
 };
 
@@ -473,6 +476,7 @@ private:
 	LcdFont font;
 	bool drawBorder;
 	TextAlignment alignment;
+	bool bold = false;							// print the text twice, 1 px apart (the fonts have no bold variant)
 
 protected:
 	PixelNumber GetHeight() const override { return height; }
@@ -485,6 +489,7 @@ public:
 	void SetText(const char * _ecv_array null pt);
 	void SetBorderVisible(bool visible) { if (drawBorder != visible) { drawBorder = visible; changed = true; } }
 	void SetBorderColour(Colour c) { if (borderColour != c) { borderColour = c; changed = true; } }
+	void SetBold(bool b) { if (bold != b) { bold = b; changed = true; } }
 	void Refresh(bool full, PixelNumber xOffset, PixelNumber yOffset) override;
 };
 
@@ -694,7 +699,8 @@ enum class MasterNavIcon : uint8_t
 {
 	Joystick,
 	List,
-	Gear
+	Gear,
+	Filament		// three filament lanes merging into one hotend
 };
 
 class ModernMasterNavButton : public SingleButton

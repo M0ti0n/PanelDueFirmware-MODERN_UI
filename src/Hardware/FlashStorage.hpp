@@ -17,7 +17,7 @@ Further modified up by David Crocker
 
 #include "asf.h"
 
-#define FLASH_DATA_LENGTH   (64)			// 64 bytes of storage
+#define FLASH_DATA_LENGTH   (128)			// 128 bytes of storage (v2 panels; v3 panels use the 512-byte user signature instead)
 
 //  FlashStorage is the main namespace for flash functions
 namespace FlashStorage

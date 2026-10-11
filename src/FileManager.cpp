@@ -20,15 +20,16 @@
 
 #if SAM4S
 // Modern 800x480 build: independent caches sized to the 6-row UI.
-// JOB: 96 entries = 16 pages. MACROS: 42 entries = 7 pages.
+// JOB: 72 entries = 12 pages (1536 bytes of names: about 21 characters per name if the list is full; with longer
+// slicer file names the name buffer fills first). MACROS: 42 entries = 7 pages.
 // The receive buffer is sized for the larger JOB list so a new listing can
 // be received before it replaces the active cache.
-constexpr size_t JobFileListSize = 2048;
-constexpr size_t JobMaxFiles = 96;
+constexpr size_t JobFileListSize = 1536;
+constexpr size_t JobMaxFiles = 72;
 constexpr size_t MacroFileListSize = 1024;
 constexpr size_t MacroMaxFiles = 42;
-constexpr size_t ReceiveFileListSize = 2048;
-constexpr size_t ReceiveMaxFiles = 96;
+constexpr size_t ReceiveFileListSize = 1536;
+constexpr size_t ReceiveMaxFiles = 72;
 #else
 constexpr size_t JobFileListSize = 2048;
 constexpr size_t JobMaxFiles = 96;
@@ -575,6 +576,14 @@ namespace FileManager
 	// This is called at the end of a JSON response
 	void EndReceivedMessage()
 	{
+		// M20 on a folder that does not exist answers with an error and no file list. For 0:/filaments that just means
+		// "no filament folders", which the FILAMENT MANAGEMENT page must hear about (it would otherwise keep waiting).
+		if (!receivingFileList && errorCode != 0
+			&& (StringEqualsIgnoreCase(fileDirectoryName.c_str(), "0:/filaments") || StringEqualsIgnoreCase(fileDirectoryName.c_str(), "0:/filaments/")))
+		{
+			UI::BeginFilamentFolders();
+			UI::EndFilamentFolders(false);
+		}
 		if (receivingFileList)
 		{
 			// We received a new file list, which may be for the files or the macro list. Find out which.
@@ -602,7 +611,25 @@ namespace FileManager
 
 			receiveFileIndex.Sort([](auto a, auto b) -> bool { return StringGreaterThan(a, b); });
 
-			if (card0 && temp.EqualsIgnoreCase("macros"))
+			if (card0 && temp.EqualsIgnoreCase("filaments"))
+			{
+				// List of filament folders for the FILAMENT MANAGEMENT page (asked for with M20 S2 P"0:/filaments").
+				// Only folders count: each one is a material with its own load.g/unload.g/config.g.
+				UI::BeginFilamentFolders();
+				if (errorCode == 0)
+				{
+					for (size_t n = 0; n < receiveFileIndex.Size(); ++n)
+					{
+						const char * const name = receiveFileIndex[n];
+						if (name[0] == '*' && name[1] != 0)
+						{
+							UI::AddFilamentFolder(name + 1);
+						}
+					}
+				}
+				UI::EndFilamentFolders(errorCode == 0);
+			}
+			else if (card0 && temp.EqualsIgnoreCase("macros"))
 			{
 				if (errorCode == 0)
 				{
@@ -657,11 +684,9 @@ namespace FileManager
 	// This is called when we receive an error code
 	void ReceiveErrorCode(int err)
 	{
-		if (receivingFileList)
-		{
-			// We have received a file list, so this error code relates to it
-			errorCode = err;
-		}
+		// Kept even without a file list: BeginNewMessage() clears it for every response, and the only use outside a
+		// file list is the missing-0:/filaments case in EndReceivedMessage().
+		errorCode = err;
 	}
 
 	void DisplayFilesList()

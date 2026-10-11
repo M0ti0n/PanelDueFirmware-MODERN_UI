@@ -131,6 +131,7 @@ static ModernTextButton *settingsFeedrateValueButton = nullptr;
 static ModernTextButton *settingsBabystepValueButton = nullptr;
 static ModernTextButton *settingsAlwaysDimButton = nullptr;
 static ModernTextButton *settingsHeaterCombineButton = nullptr;
+static ModernTextButton *settingsFilamentModeButton = nullptr;
 static String<48> settingsIpText;
 static String<16> settingsFeedrateText;
 static String<16> settingsBabystepText;
@@ -170,7 +171,11 @@ enum class StandardPopupContext : uint8_t
 	SettingsFeedrate,
 	SettingsBabystep,
 	Filasnake,
-	FilasnakeConfirm		// "bored waiting?" question before the game
+	FilasnakeConfirm,		// "bored waiting?" question before the game
+	FilamentMaterial,		// FILAMENT MANAGEMENT: material picker
+	FilamentColour,			// FILAMENT MANAGEMENT: colour picker
+	SettingsOrientation,
+	SettingsFilamentMode
 };
 static StandardPopupContext standardPopupContext = StandardPopupContext::None;
 static PopupWindow *standardPopup = nullptr;
@@ -212,6 +217,8 @@ static void OpenM291TextKeyboard();
 static void M291TextData(const char *data);
 
 static int settingsPendingVolume = 0;
+static int settingsPendingOrientation = 0;
+static int settingsPendingFilamentMode = 0;		// 0 AUTO, 1 PANEL, 2 MACROS (popup order)
 static int settingsPendingBrightness = 100;
 static int settingsPendingInfoTimeout = DefaultInfoTimeout;
 static int settingsPendingAccent = 1;
@@ -539,7 +546,7 @@ static JobStatusConfirmAction jobStatusConfirmAction = JobStatusConfirmAction::N
 static float jobStatusHeaterTemps[JobStatusMaxHeaters] = { 0.0f };
 static bool jobStatusHeaterValid[JobStatusMaxHeaters] = { false };
 static OM::HeaterStatus jobStatusHeaterStatus[JobStatusMaxHeaters] = { OM::HeaterStatus::off };
-static constexpr unsigned int JobStatusMaxExtruders = 8;
+static constexpr unsigned int JobStatusMaxExtruders = 16;		// 16 filament slots (MMUs, tool changers)
 static float jobStatusFilamentDiameter[JobStatusMaxExtruders] = { 0.0f };
 static bool jobStatusFilamentDiameterValid[JobStatusMaxExtruders] = { false };
 static float jobStatusRequestedSpeed = 0.0f, jobStatusTopSpeed = 0.0f, jobStatusExtrusionRate = 0.0f;
@@ -557,7 +564,7 @@ static uint32_t jobStatusLastLiveRefresh = 0;
 static constexpr unsigned int TuneToolsPerPage = 4;
 static PixelNumber tuneRowLabelX[3] = { 0, 0, 0 }, tuneRowTileX[3] = { 0, 0, 0 };
 static constexpr PixelNumber tuneRowTileW = 110;
-static constexpr unsigned int TuneMaxExtruders = 8;
+static constexpr unsigned int TuneMaxExtruders = 16;
 static constexpr unsigned int TuneMaxFans = 16;
 static unsigned int tuneToolPage = 0;
 
@@ -582,13 +589,23 @@ static String<12> tuneGeneralFanText[2];
 static String<16> tuneZOffsetText;
 static String<12> tuneZPlusText, tuneZMinusText;
 
-static int tuneExtruderFactor[TuneMaxExtruders] = { 100, 100, 100, 100, 100, 100, 100, 100 };
+static int tuneExtruderFactor[TuneMaxExtruders] = { 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100 };
+static_assert(TuneMaxExtruders == 16, "tuneExtruderFactor needs one 100 per extruder");
 static float tunePressureAdvance[TuneMaxExtruders] = { 0.0f };
 static bool tunePressureAdvanceValid[TuneMaxExtruders] = { false };
 static int tuneFanPercent[TuneMaxFans] = { 0 };
 static bool tuneFanValid[TuneMaxFans] = { false };
 static bool tuneFanThermostatic[TuneMaxFans] = { false };		// fans with thermostatic control (e.g. a heat-break fan)
 static String<16> tuneFanNames[TuneMaxFans];
+static int8_t tuneFanActual[TuneMaxFans] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };	// fans[].actualValue in %
+static_assert(TuneMaxFans == 16, "tuneFanActual needs one -1 per fan");
+
+// The speed shown for a general fan (FAN AUX, FAN CHA). A thermostatic fan always reports requestedValue 1.0 (100%), so its
+// real output (actualValue) is shown instead. Other fans show the speed that was set, the value TUNE changes.
+static int GeneralFanPercent(int fan)
+{
+	return (tuneFanThermostatic[fan] && tuneFanActual[fan] >= 0) ? tuneFanActual[fan] : tuneFanPercent[fan];
+}
 static int tuneSpeedPercent = 100;
 
 static String<32> tunePopupTitleText;
@@ -661,6 +678,7 @@ static TextButtonWithLabel *babystepMinusButton, *babystepPlusButton;
 static IntegerField *fpSizeField, *fpFilamentField, *filePopupTitleField;
 static ProgressBar *printProgressBar;
 static SingleButton *railStopButton, *tabControl, *tabStatus, *tabSystem, *railAlertButton;
+static SingleButton *tabFilament = nullptr;
 #if DISPLAY_X == 800
 static ModernCard *railBackground = nullptr, *topTabSeparator = nullptr;
 #endif
@@ -703,8 +721,8 @@ static bool IsPermanentRailField(const DisplayField *field)
 	// The whole five-button rail is one permanent UI group.  None of these
 	// fields (or the rail backing card / tab separator) may be pushed into the
 	// content pane by RelayoutLegacyFields().
-	return field == railStopButton || field == tabControl || field == tabStatus ||
-		field == tabSystem || field == railAlertButton || field == railBackground ||
+	return field == railStopButton || field == tabControl || field == tabStatus || field == tabFilament ||
+		field == tabSystem || (railAlertButton != nullptr && field == railAlertButton) || field == railBackground ||
 		field == topTabSeparator;
 #else
 	return field == tabControl || field == tabStatus || field == tabSystem;
@@ -821,7 +839,7 @@ static bool IsTopTabEvent(Event e)
 {
 	return e == evControlTools || e == evControlMovement || e == evControlExtrusion || e == evControlMacros
 		|| e == evStatusJobStatus || e == evStatusTune || e == evStatusJob || e == evStatusObjects
-		|| e == evSystemConsole || e == evSystemSettings;
+		|| e == evSystemConsole || e == evSystemSettings || e == evFilamentTopTab;
 }
 
 static Event GetTopTabEventForPage(UiPage page)
@@ -838,6 +856,7 @@ static Event GetTopTabEventForPage(UiPage page)
 	case UiPage::StatusObjects:		return evStatusObjects;
 	case UiPage::SystemConsole:		return evSystemConsole;
 	case UiPage::SystemSettings:	return evSystemSettings;
+	case UiPage::FilamentManagement:	return evFilamentTopTab;
 	default:						return evNull;
 	}
 }
@@ -2355,8 +2374,8 @@ static void CreateSetupTabFields(const ColourScheme& colours)
 		{350,240,"SCREEN DIMMING",     evSettingsAlwaysDimToggle},
 		{582,240,"BAUD",               evSettingsBaudOpen},
 		{118,310,"TOUCH CALIBR.",      evSettingsTouchOpen},
-		{350,310,"MIRROR DISPLAY",     evInvertX},
-		{582,310,"INVERT DISPLAY",     evInvertY},
+		{350,310,"ORIENTATION",        evSettingsOrientationOpen},
+		{582,310,"FILAMENT: AUTO",     evSettingsFilamentModeToggle},
 		{118,380,"HEAT NOT COMB",    evSettingsHeaterCombineOpen}
 	};
 	for (const SettingTileDef& def : settingTiles)
@@ -2370,6 +2389,10 @@ static void CreateSetupTabFields(const ColourScheme& colours)
 		else if (def.event == evSettingsHeaterCombineOpen)
 		{
 			settingsHeaterCombineButton = b;
+		}
+		else if (def.event == evSettingsFilamentModeToggle)
+		{
+			settingsFilamentModeButton = b;
 		}
 		mgr.AddField(b);
 	}
@@ -2461,13 +2484,14 @@ static void CreateCommonFields(const ColourScheme& colours)
 	railStopButton = new ModernStopButton(5, 7, 76, 76, evEmergencyStop, DEFAULT_FONT);
 	tabControl = new ModernMasterNavButton(101, 7, 76, 76, MasterNavIcon::Joystick, evTabControl);
 	tabStatus = new ModernMasterNavButton(197, 7, 76, 76, MasterNavIcon::List, evTabStatus);
-	tabSystem = new ModernMasterNavButton(293, 7, 76, 76, MasterNavIcon::Gear, evTabSystem);
-	railAlertButton = new ModernAlertNavButton(389, 7, 76, 76, evSystemConsole);
+	tabFilament = new ModernMasterNavButton(293, 7, 76, 76, MasterNavIcon::Filament, evTabFilament);
+	tabSystem = new ModernMasterNavButton(389, 7, 76, 76, MasterNavIcon::Gear, evTabSystem);	// bottom slot; the ALERT shortcut is gone
+	railAlertButton = nullptr;
 	mgr.AddField(railStopButton);
 	mgr.AddField(tabControl);
 	mgr.AddField(tabStatus);
+	mgr.AddField(tabFilament);
 	mgr.AddField(tabSystem);
-	mgr.AddField(railAlertButton);
 
 	// The backing card is part of the permanent rail too.  Keeping a pointer to
 	// it is intentional: RelayoutLegacyFields() uses that identity to leave it
@@ -4606,11 +4630,11 @@ static void RefreshJobStatusTile(unsigned int slot)
 		break;
 	case JobStatusTileType::FanAux:
 		index = FindNamedFan("FAN_AUX");
-		if (index >= 0) value.printf("%d%%", tuneFanPercent[index]);
+		if (index >= 0) value.printf("%d%%", GeneralFanPercent(index));
 		break;
 	case JobStatusTileType::FanCha:
 		index = FindNamedFan("FAN_CHA");
-		if (index >= 0) value.printf("%d%%", tuneFanPercent[index]);
+		if (index >= 0) value.printf("%d%%", GeneralFanPercent(index));
 		break;
 	case JobStatusTileType::SpeedReq:
 		value.printf("%.0f mm/s", (double)jobStatusRequestedSpeed);
@@ -5135,7 +5159,7 @@ static void RefreshTuneGeneralFans()
 		const int fan = tuneGeneralFanIndices[i];
 		if (fan >= 0)
 		{
-			tuneGeneralFanText[i].printf("%d%%", tuneFanPercent[fan]);
+			tuneGeneralFanText[i].printf("%d%%", GeneralFanPercent(fan));
 			tuneGeneralFanButtons[i]->SetText(tuneGeneralFanText[i].c_str());
 			mgr.Show(tuneGeneralFanButtons[i], true);
 			mgr.Show(tuneGeneralFanLabels[i], true);
@@ -5399,6 +5423,11 @@ static void RefreshModernSettingsPage()
 	{
 		settingsHeaterCombineButton->SetBorderVisible(nvData.GetHeaterCombineType() == HeaterCombineType::combined);
 		settingsHeaterCombineButton->SetBorderColour(accent);
+	}
+	if (settingsFilamentModeButton != nullptr)
+	{
+		const uint8_t mode = nvData.GetFilamentMode();
+		settingsFilamentModeButton->SetText(mode == 0 ? "FILAMENT: MACROS" : mode == 1 ? "FILAMENT: PANEL" : "FILAMENT: AUTO");
 	}
 }
 
@@ -5898,6 +5927,851 @@ static void OpenFilasnakePopup()
 	mgr.SetPopup(standardPopup, SnakePopupX, AutoPlace);
 }
 
+// =====================================================================================================
+// FILAMENT MANAGEMENT master page (800x480)
+// One column per tool, laid out exactly like CONTROL > TOOLS (5 columns; more than 5 tools -> 4 per page plus the up/down
+// tiles). Each column: header (tool + temperature), material tile (colour chip, runout dot, filament name), JOB tile (metres
+// and grams this print needs from that extruder) and one action button.
+// When every tool shares one heater it is an MMU: one wide NOZZLE tile replaces the per-tool temperatures.
+// Two modes (SYSTEM > SETTINGS):
+//  - MACROS: RRF filament system. The material comes from RRF (M701). CHANGE/LOAD -> material popup -> colour popup ->
+//            T<n> / M702 / M701 S"<name>". The material tile only opens the colour picker.
+//  - PANEL:  information only, nothing is sent. Material tile -> material popup -> colour popup. The button is a shortcut
+//            to CONTROL > EXTRUDE.
+// =====================================================================================================
+static constexpr unsigned int FmMaxSlots = FlashData::FilamentSlots;	// 16
+static constexpr unsigned int FmColumns = 5, FmPagedColumns = 4;
+static constexpr unsigned int FmPopupItemsPerPage = 6, FmColoursPerPage = 8, FmPaletteSize = 64;
+static constexpr unsigned int FmMaxExtraFolders = 8;
+static constexpr uint8_t FmExtraBase = 64;								// material codes 64.. are /filaments folders not in the table
+static constexpr uint8_t FmNone = 0xFF;
+static constexpr uint8_t FmNaturalColour = 15;							// "natural / clear": drawn as an outlined tile
+
+// Built-in materials, in the order of the popup pages. Density is stored as (g/cm3 - 0.80) * 100 to fit in a byte.
+struct FmMaterial { const char *name; uint8_t density; };
+static const FmMaterial fmMaterials[] =
+{
+	{ "PLA", 44 }, { "PETG", 47 }, { "ABS", 24 }, { "ASA", 27 }, { "TPU", 41 }, { "PA", 32 },
+	{ "PLA+", 43 }, { "ASA+", 27 }, { "ABS+", 25 }, { "PLA R", 44 }, { "PETG R", 47 }, { "TPU L", 41 },
+	{ "PETG-CF", 50 }, { "PETG-GF", 58 }, { "ABS-GF", 35 }, { "PA-CF", 40 }, { "PC", 40 }, { "PC-CF", 45 },
+	{ "PCTG", 43 }, { "TPE", 40 }, { "PP", 10 }, { "PVB", 28 }, { "HIPS", 24 }, { "PVA", 43 },
+};
+static constexpr unsigned int FmNumMaterials = ARRAY_SIZE(fmMaterials);
+static_assert(FmNumMaterials <= 32, "the folder mask holds 32 materials");
+
+// 64 filament colours, 8 per popup page: pages 1-2 the 16 most common, then shades grouped by hue.
+static const Colour fmPalette[FmPaletteSize] =
+{
+	UTFT::fromRGB(0,0,0),       UTFT::fromRGB(245,245,245), UTFT::fromRGB(128,128,128), UTFT::fromRGB(192,192,196),
+	UTFT::fromRGB(214,40,40),   UTFT::fromRGB(240,120,20),  UTFT::fromRGB(250,215,30),  UTFT::fromRGB(212,175,55),
+	UTFT::fromRGB(40,160,60),   UTFT::fromRGB(20,90,40),    UTFT::fromRGB(110,180,230), UTFT::fromRGB(30,80,200),
+	UTFT::fromRGB(120,60,170),  UTFT::fromRGB(240,130,180), UTFT::fromRGB(120,75,40),   UTFT::fromRGB(28,34,43),		// 15 natural
+	UTFT::fromRGB(40,40,44),    UTFT::fromRGB(70,70,74),    UTFT::fromRGB(105,105,110), UTFT::fromRGB(160,160,165),
+	UTFT::fromRGB(210,210,212), UTFT::fromRGB(130,140,150), UTFT::fromRGB(240,235,215), UTFT::fromRGB(215,195,160),
+	UTFT::fromRGB(120,20,30),   UTFT::fromRGB(170,20,40),   UTFT::fromRGB(255,110,90),  UTFT::fromRGB(250,150,130),
+	UTFT::fromRGB(200,30,140),  UTFT::fromRGB(255,60,150),  UTFT::fromRGB(255,190,210), UTFT::fromRGB(190,90,110),
+	UTFT::fromRGB(220,80,10),   UTFT::fromRGB(255,180,130), UTFT::fromRGB(255,170,0),   UTFT::fromRGB(255,240,90),
+	UTFT::fromRGB(200,160,40),  UTFT::fromRGB(200,170,120), UTFT::fromRGB(80,45,25),    UTFT::fromRGB(184,115,51),
+	UTFT::fromRGB(170,230,40),  UTFT::fromRGB(90,190,60),   UTFT::fromRGB(110,120,40),  UTFT::fromRGB(150,230,190),
+	UTFT::fromRGB(30,70,40),    UTFT::fromRGB(0,130,130),   UTFT::fromRGB(120,130,90),  UTFT::fromRGB(50,170,130),
+	UTFT::fromRGB(20,30,80),    UTFT::fromRGB(50,90,220),   UTFT::fromRGB(130,200,240), UTFT::fromRGB(0,200,230),
+	UTFT::fromRGB(60,210,200),  UTFT::fromRGB(70,110,150),  UTFT::fromRGB(0,70,170),    UTFT::fromRGB(190,225,245),
+	UTFT::fromRGB(150,80,220),  UTFT::fromRGB(190,160,230), UTFT::fromRGB(110,40,90),   UTFT::fromRGB(60,40,120),
+	UTFT::fromRGB(210,170,220), UTFT::fromRGB(200,255,80),  UTFT::fromRGB(80,90,40),    UTFT::fromRGB(255,255,200),
+};
+
+// Colours of the modern UI
+static constexpr Colour FmPageBg = UTFT::fromRGB(18, 22, 28);
+static constexpr Colour FmTile = UTFT::fromRGB(28, 34, 43);
+static constexpr Colour FmText = UTFT::fromRGB(229, 232, 236);
+static constexpr Colour FmMuted = UTFT::fromRGB(154, 164, 178);
+static constexpr Colour FmBorder = UTFT::fromRGB(59, 67, 79);
+static constexpr Colour FmRed = UTFT::fromRGB(201, 50, 24);
+static constexpr Colour FmGreen = UTFT::fromRGB(86, 184, 52);
+static constexpr Colour FmBlue = UTFT::fromRGB(95, 195, 220);			// same as the JOB delete button
+static constexpr Colour FmDarkText = UTFT::fromRGB(36, 36, 36);
+
+// Data from RRF
+static String<20> fmExtruderFilament[FmMaxSlots];		// move.extruders[].filament (MACROS mode), for display and matching only
+static uint8_t fmMonitor[FmMaxSlots];					// 0 none, 1 ok, 2 no filament, 3 other state
+static float fmJobFilament[FmMaxSlots];					// job.file.filament[] in mm, < 0 = unknown
+static uint32_t fmFolderMask = 0;						// built-in materials that have a folder in /filaments
+static String<32> fmFolderExtra[FmMaxExtraFolders];		// other folders (full names: they are sent with M701)
+static uint8_t fmFolderExtraCount = 0;
+static bool fmFoldersLoaded = false;
+static bool fmAnyFolders = false;						// the last folder list had at least one material folder
+static uint32_t fmFoldersRequestedAt = 0;
+static bool fmFoldersPending = false;					// M20 for 0:/filaments sent, no answer yet
+
+// Page fields
+// The fields of one column, kept in one array so that showing/hiding/repainting a column is a loop.
+// Order matters: the paint order inside a column is decided by AddField (see CreateFilamentPageFields).
+enum FmField : uint8_t
+{
+	FmHeaderCard, FmHeaderName, FmHeaderTemp,
+	FmMatCard, FmMatChip, FmMatDot, FmMatName, FmMatRunout, FmMatTouch,
+	FmJobCard, FmJobLabel, FmJobMetres, FmJobGrams,
+	FmButton,
+	FmFieldCount
+};
+static DisplayField *fmField[FmColumns][FmFieldCount] = { { nullptr } };
+static inline ModernCard *FmCard(unsigned int c, FmField f) { return static_cast<ModernCard*>(fmField[c][f]); }
+static inline StaticTextField *FmText_(unsigned int c, FmField f) { return static_cast<StaticTextField*>(fmField[c][f]); }
+static inline ModernTextButton *FmButtonOf(unsigned int c) { return static_cast<ModernTextButton*>(fmField[c][FmButton]); }
+static ModernCard *fmMmuCard = nullptr;
+static StaticTextField *fmMmuLabel, *fmMmuTemp, *fmMmuActive;
+static ModernIconButton *fmPageUpButton, *fmPageDownButton;
+static String<6> fmHeaderNameText[FmColumns];
+static String<12> fmHeaderTempText[FmColumns], fmMatNameText[FmColumns];
+static String<12> fmJobMetresText[FmColumns];
+static String<10> fmJobGramsText[FmColumns];
+static String<12> fmMmuTempText;
+static String<14> fmMmuActiveText;
+static const char *fmButtonLabel[FmColumns] = { nullptr };
+static DisplayField *filamentRoot = nullptr;
+static unsigned int fmPage = 0;
+static int fmColumnTool[FmColumns] = { -1, -1, -1, -1, -1 };
+static bool fmColumnRunout[FmColumns] = { false };
+static bool fmMmuLayout = false;
+static uint32_t fmLastRefresh = 0;
+
+// Popup fields and state
+static ModernTextButton *fmPopupUnloadButton = nullptr;
+static ModernIconButton *fmPopupUpButton = nullptr, *fmPopupDownButton = nullptr;
+static String<28> fmPopupInfoText, fmPopupTitleText;
+static String<8> fmPopupPageText;
+enum class FmFlow : uint8_t { Change, ColourOnly };
+static FmFlow fmFlow = FmFlow::Change;
+static int fmPopupTool = -1;
+static int fmPendingMaterial = -1, fmPendingColour = -1;
+static unsigned int fmPopupPage = 0;
+static uint8_t fmPopupList[FmNumMaterials + FmMaxExtraFolders];
+static unsigned int fmPopupListCount = 0;
+
+static __attribute__((noinline)) bool FmPanelMode()
+{
+	// MACROS (0) and PANEL (1) are fixed. AUTO (not set) follows the printer: MACROS when 0:/filaments has material
+	// folders, PANEL otherwise (also while the folder list has not arrived yet).
+	const uint8_t mode = nvData.GetFilamentMode();
+	return (mode == 0xFF) ? !fmAnyFolders : (mode != 0);
+}
+
+static __attribute__((noinline)) const char *FmMaterialName(int code)
+{
+	if (code >= 0 && code < (int)FmNumMaterials) return fmMaterials[code].name;
+	if (code >= FmExtraBase && code < FmExtraBase + (int)fmFolderExtraCount) return fmFolderExtra[code - FmExtraBase].c_str();
+	return nullptr;
+}
+
+// Built-in material index of a name, or -1. Exact match: the name is also the folder name M701 uses.
+static __attribute__((noinline)) int FmFindMaterial(const char *name)
+{
+	for (unsigned int i = 0; i < FmNumMaterials; ++i)
+	{
+		if (strcmp(fmMaterials[i].name, name) == 0) return (int)i;
+	}
+	return -1;
+}
+
+// g/cm3 for the gram estimate; unknown names use PLA
+static __attribute__((noinline)) float FmDensity(const char *name)
+{
+	if (name != nullptr)
+	{
+		for (unsigned int i = 0; i < FmNumMaterials; ++i)
+		{
+			if (strcasecmp(fmMaterials[i].name, name) == 0) return 0.80f + (float)fmMaterials[i].density * 0.01f;
+		}
+	}
+	return 1.24f;
+}
+
+static __attribute__((noinline)) int FmToolExtruder(const OM::Tool *tool)
+{
+	return (tool != nullptr && !tool->extruders.IsEmpty()) ? (int)tool->extruders.LowestSetBit() : -1;
+}
+
+static __attribute__((noinline)) int FmToolHeater(const OM::Tool *tool)
+{
+	return (tool != nullptr && tool->heaters[0] != nullptr) ? (int)tool->heaters[0]->heaterIndex : -1;
+}
+
+// Name of the material in a tool's slot: from RRF in MACROS mode, from the panel's own memory in PANEL mode
+static __attribute__((noinline)) const char *FmSlotMaterialName(int toolIndex)
+{
+	if (toolIndex < 0 || toolIndex >= (int)FmMaxSlots) return nullptr;
+	if (FmPanelMode())
+	{
+		return FmMaterialName(nvData.GetSlotMaterial(toolIndex));
+	}
+	const int ext = FmToolExtruder(OM::GetTool(toolIndex));
+	return (ext >= 0 && ext < (int)FmMaxSlots && !fmExtruderFilament[ext].IsEmpty()) ? fmExtruderFilament[ext].c_str() : nullptr;
+}
+
+// Material code of what is in a slot now (for the popup's initial outline), or -1
+static __attribute__((noinline)) int FmSlotMaterialCode(int toolIndex)
+{
+	if (FmPanelMode())
+	{
+		const uint8_t m = nvData.GetSlotMaterial(toolIndex);
+		return (m < FmNumMaterials) ? (int)m : -1;
+	}
+	const char * const name = FmSlotMaterialName(toolIndex);
+	if (name == nullptr) return -1;
+	const int builtIn = FmFindMaterial(name);
+	if (builtIn >= 0) return builtIn;
+	for (unsigned int i = 0; i < fmFolderExtraCount; ++i)
+	{
+		// the loaded name is kept to 20 characters, the folder name in full
+		if (strncmp(fmFolderExtra[i].c_str(), name, fmExtruderFilament[0].Capacity()) == 0) return FmExtraBase + (int)i;
+	}
+	return -1;
+}
+
+static void FmRequestFolders()
+{
+	SerialIo::Sendf("M20 S2 P\"0:/filaments\"\n");
+	fmFoldersRequestedAt = SystemTick::GetTickCount();
+	fmFoldersPending = true;
+}
+
+// Tools in object-model order, up to 16
+static __attribute__((noinline)) unsigned int FmCollectTools(int tools[FmMaxSlots])
+{
+	unsigned int count = 0;
+	OM::IterateToolsWhile([&](OM::Tool*& tool, size_t) {
+		if (tool != nullptr && tool->index < (int)FmMaxSlots && count < FmMaxSlots)
+		{
+			tools[count++] = tool->index;
+		}
+		return count < FmMaxSlots;
+	});
+	return count;
+}
+
+// Hide a page field. Only a visible field is erased: Window::Show() also erases a hidden field again whenever it has a
+// pending change, which would paint the page background over the card underneath it every refresh.
+static __attribute__((noinline)) void FmHide(DisplayField *field)
+{
+	if (field->IsVisible())
+	{
+		mgr.Show(field, false);
+	}
+}
+
+// Show text in a field that is fed from the buffer 'shown', repainting only when the text really changed
+template<size_t N> static void FmSetText(StaticTextField *field, String<N>& shown, const char *text)
+{
+	// Compare only what fits in 'shown': a longer text is stored cut off and would otherwise repaint every second
+	if (strncmp(shown.c_str(), text, N) != 0)
+	{
+		shown.copy(text);
+		field->SetValue(shown.c_str(), true);
+	}
+}
+
+// Update the page. Only values that changed are marked for repainting. Returns true when the layout changed
+// (columns, MMU layout, runout) and the caller should repaint the whole page.
+static bool FilamentRefreshPage()
+{
+	bool structural = false;
+	if (fmField[0][FmHeaderCard] == nullptr) return false;
+	const Colour accent = GetModernAccentColour();
+
+	int tools[FmMaxSlots];
+	const unsigned int count = FmCollectTools(tools);
+	const unsigned int perPage = (count > FmColumns) ? FmPagedColumns : FmColumns;
+	const unsigned int maxPage = (count == 0) ? 0 : (count - 1) / perPage;
+	if (fmPage > maxPage) fmPage = maxPage;
+
+	// MMU: two or more tools that all use the same heater
+	int sharedHeater = -2;
+	for (unsigned int i = 0; i < count; ++i)
+	{
+		const int h = FmToolHeater(OM::GetTool(tools[i]));
+		if (sharedHeater == -2) sharedHeater = h;
+		else if (h != sharedHeater) { sharedHeater = -1; break; }
+	}
+	const bool mmu = count >= 2 && sharedHeater >= 0;
+	if (mmu != fmMmuLayout)
+	{
+		fmMmuLayout = mmu;
+		structural = true;
+	}
+
+	mgr.Show(fmMmuCard, mmu);
+	mgr.Show(fmMmuLabel, mmu);
+	mgr.Show(fmMmuTemp, mmu);
+	mgr.Show(fmMmuActive, mmu);
+	if (mmu)
+	{
+		String<16> t;
+		if (sharedHeater < (int)JobStatusMaxHeaters && jobStatusHeaterValid[sharedHeater])
+		{
+			t.printf("%.1f" DEGREE_SYMBOL "C", (double)jobStatusHeaterTemps[sharedHeater]);
+		}
+		else
+		{
+			t.copy("---" DEGREE_SYMBOL "C");
+		}
+		FmSetText(fmMmuTemp, fmMmuTempText, t.c_str());
+		if (currentTool >= 0) t.printf("ACTIVE  T%d", currentTool); else t.copy("NO TOOL");
+		FmSetText(fmMmuActive, fmMmuActiveText, t.c_str());
+	}
+
+	const bool panel = FmPanelMode();
+	for (unsigned int column = 0; column < FmColumns; ++column)
+	{
+		const unsigned int pos = fmPage * perPage + column;
+		const bool visible = column < perPage && pos < count;
+		const int toolIndex = visible ? tools[pos] : -1;
+		if (fmColumnTool[column] != toolIndex)
+		{
+			fmColumnTool[column] = toolIndex;
+			structural = true;
+		}
+		if (!visible)
+		{
+			for (unsigned int f = 0; f < FmFieldCount; ++f)
+			{
+				FmHide(fmField[column][f]);
+			}
+			continue;
+		}
+
+		const OM::Tool * const tool = OM::GetTool(toolIndex);
+		const PixelNumber x = FmCard(column, FmHeaderCard)->GetMinX();
+		const bool activeTool = (toolIndex == currentTool);
+
+		// Header: tool + temperature (normal) or a short slot header under the NOZZLE tile (MMU)
+		FmCard(column, FmHeaderCard)->SetPosition(x, mmu ? 146 : 84);
+		FmCard(column, FmHeaderCard)->SetHeight(mmu ? 52 : 114);
+		FmCard(column, FmHeaderCard)->SetBorderVisible(activeTool);
+		FmCard(column, FmHeaderCard)->SetBorderColour(accent);
+		FmText_(column, FmHeaderName)->SetPosition(x, mmu ? 156 : 97);
+		const Colour headerText = activeTool ? accent : FmText;
+		FmText_(column, FmHeaderName)->SetColours(headerText, FmTile);
+		FmText_(column, FmHeaderTemp)->SetColours(headerText, FmTile);
+		String<16> t;
+		t.printf("T%d", toolIndex);
+		FmSetText(FmText_(column, FmHeaderName), fmHeaderNameText[column], t.c_str());
+		const int heater = FmToolHeater(tool);
+		if (!mmu)										// in the MMU layout the field is hidden: the NOZZLE tile shows it
+		{
+			if (heater >= 0 && heater < (int)JobStatusMaxHeaters && jobStatusHeaterValid[heater])
+			{
+				t.printf("%.1f" DEGREE_SYMBOL "C", (double)jobStatusHeaterTemps[heater]);
+			}
+			else
+			{
+				t.copy("---" DEGREE_SYMBOL "C");
+			}
+			FmSetText(FmText_(column, FmHeaderTemp), fmHeaderTempText[column], t.c_str());
+		}
+
+		// Material tile
+		const int ext = FmToolExtruder(tool);
+		const uint8_t monitor = (ext >= 0 && ext < (int)FmMaxSlots) ? fmMonitor[ext] : 0;
+		const bool runout = (monitor == 2);
+		if (runout != fmColumnRunout[column])
+		{
+			fmColumnRunout[column] = runout;
+			structural = true;
+		}
+		FmCard(column, FmMatCard)->SetBorderVisible(runout);
+		FmCard(column, FmMatCard)->SetBorderColour(FmRed);
+		const uint8_t colour = nvData.GetSlotColour((size_t)toolIndex);
+		if (colour == FmNone || colour == FmNaturalColour)
+		{
+			FmCard(column, FmMatChip)->SetFillColour(FmTile);
+			FmCard(column, FmMatChip)->SetBorderVisible(true);
+			FmCard(column, FmMatChip)->SetBorderColour(colour == FmNone ? FmBorder : FmMuted);
+		}
+		else
+		{
+			const Colour c = fmPalette[colour];
+			FmCard(column, FmMatChip)->SetFillColour(c);
+			// near-black swatches get a grey edge so they stay visible on the dark tile
+			FmCard(column, FmMatChip)->SetBorderVisible(((c >> 11) + ((c >> 5) & 0x3F) / 2 + (c & 0x1F)) < 12);
+			FmCard(column, FmMatChip)->SetBorderColour(FmBorder);
+		}
+		FmCard(column, FmMatDot)->SetFillColour(monitor == 1 ? FmGreen : monitor == 2 ? FmRed : monitor == 3 ? FmMuted : FmBorder);
+		const char * const material = FmSlotMaterialName(toolIndex);
+		FmText_(column, FmMatName)->SetColours((material != nullptr) ? FmText : FmMuted, FmTile);
+		FmText_(column, FmMatName)->SetPosition(x, runout ? 222 : 234);
+		FmSetText(FmText_(column, FmMatName), fmMatNameText[column], (material != nullptr) ? material : "---");
+
+		// JOB tile: metres from RRF, grams = length x filament cross-section x density
+		const float mm = (ext >= 0 && ext < (int)FmMaxSlots) ? fmJobFilament[ext] : -1.0f;
+		if (mm > 0.0f)
+		{
+			const float d = (ext < (int)JobStatusMaxExtruders && jobStatusFilamentDiameterValid[ext] && jobStatusFilamentDiameter[ext] > 0.5f)
+							? jobStatusFilamentDiameter[ext] : 1.75f;
+			const float grams = mm * 0.7853982f * d * d * FmDensity(material) * 0.001f;
+			String<16> g;
+			t.printf("%.1f m", (double)(mm * 0.001f));
+			if (grams < 10.0f) g.printf("%.1f g", (double)grams); else g.printf("%.0f g", (double)grams);
+			FmText_(column, FmJobMetres)->SetColours(FmText, FmTile);
+			FmSetText(FmText_(column, FmJobMetres), fmJobMetresText[column], t.c_str());
+			FmSetText(FmText_(column, FmJobGrams), fmJobGramsText[column], g.c_str());
+		}
+		else
+		{
+			FmText_(column, FmJobMetres)->SetColours(FmMuted, FmTile);
+			FmSetText(FmText_(column, FmJobMetres), fmJobMetresText[column], "---");
+			FmSetText(FmText_(column, FmJobGrams), fmJobGramsText[column], "");
+		}
+
+		// Action button
+		const bool empty = (material == nullptr);
+		const char * const label = panel ? "EXTRUDE" : (empty ? "LOAD" : "CHANGE");
+		if (fmButtonLabel[column] != label)			// SetText always repaints, so only call it on a real change
+		{
+			fmButtonLabel[column] = label;
+			FmButtonOf(column)->SetText(label);
+		}
+		FmButtonOf(column)->SetColours((!panel && empty) ? accent : FmText, FmTile);
+		FmButtonOf(column)->SetBorderVisible(!panel && empty);
+		FmButtonOf(column)->SetBorderColour(accent);
+		FmButtonOf(column)->SetEvent(evFilamentChange, (int)column);
+		static_cast<ModernTouchArea*>(fmField[column][FmMatTouch])->SetEvent(evFilamentTileTap, (int)column);
+
+		// Visibility (only marks fields; the caller repaints in list order, cards before their text).
+		// A card that repaints wipes the fields on it, so those repaint too.
+		bool cardChanged = false;
+		for (unsigned int f = 0; f < FmFieldCount; ++f)
+		{
+			DisplayField * const field = fmField[column][f];
+			if ((f == FmHeaderTemp && mmu) || (f == FmMatRunout && !runout))
+			{
+				FmHide(field);
+				continue;
+			}
+			if (f == FmHeaderCard || f == FmMatCard || f == FmJobCard)
+			{
+				cardChanged = field->HasChanged();
+			}
+			field->Show(true);
+			if (cardChanged)
+			{
+				field->SetChanged();
+			}
+		}
+	}
+
+	const bool paged = count > FmColumns;
+	mgr.Show(fmPageUpButton, paged && fmPage > 0);
+	mgr.Show(fmPageDownButton, paged && fmPage < maxPage);
+	return structural;
+}
+
+static void __attribute__((noinline)) FmAddText(unsigned int c, FmField f, PixelNumber y, PixelNumber x, PixelNumber w, TextAlignment a, const char *t)
+{
+	mgr.AddField(fmField[c][f] = new StaticTextField(y, x, w, a, t));
+}
+
+static void __attribute__((noinline)) FmAddCard(unsigned int c, FmField f, PixelNumber y, PixelNumber x, PixelNumber w, PixelNumber h, Colour fill, Colour border)
+{
+	mgr.AddField(fmField[c][f] = new ModernCard(y, x, w, h, fill, border, false));
+}
+
+static void CreateFilamentPageFields()
+{
+	mgr.SetRoot(baseRoot);
+	const Colour accent = GetModernAccentColour();
+	const PixelNumber w = ControlW(126);
+
+	for (unsigned int c = 0; c < FmColumns; ++c)
+	{
+		const PixelNumber x = ControlX(98 + c * 140);
+
+		// AddField prepends: a card added after its text paints underneath it
+		DisplayField::SetDefaultFont(glcd28x32);
+		DisplayField::SetDefaultColours(FmText, FmTile);
+		FmAddText(c, FmHeaderName, 97, x, w, TextAlignment::Centre, "");
+		FmAddText(c, FmHeaderTemp, 149, x, w, TextAlignment::Centre, "");
+		FmAddCard(c, FmHeaderCard, 84, x, w, 114, FmTile, accent);
+
+		FmAddText(c, FmMatName, 234, x, w, TextAlignment::Centre, "");
+		DisplayField::SetDefaultFont(glcd19x21);
+		DisplayField::SetDefaultColours(FmRed, FmTile);
+		FmAddText(c, FmMatRunout, 262, x, w, TextAlignment::Centre, "RUNOUT");
+		FmAddCard(c, FmMatChip, 215, x + 10, 20, 20, FmTile, FmBorder);
+		FmAddCard(c, FmMatDot, 218, x + w - 24, 13, 13, FmBorder, FmBorder);
+		FmAddCard(c, FmMatCard, 206, x, w, 89, FmTile, FmRed);
+		mgr.AddField(fmField[c][FmMatTouch] = new ModernTouchArea(206, x, w, 89, evFilamentTileTap, (int)c));
+
+		DisplayField::SetDefaultColours(FmMuted, FmTile);
+		FmAddText(c, FmJobLabel, 310, x + 10, 60, TextAlignment::Left, "JOB");
+		DisplayField::SetDefaultColours(FmText, FmTile);
+		FmAddText(c, FmJobGrams, 361, x, w, TextAlignment::Centre, "");
+		DisplayField::SetDefaultFont(glcd28x32);
+		FmAddText(c, FmJobMetres, 326, x, w, TextAlignment::Centre, "");
+		FmAddCard(c, FmJobCard, 303, x, w, 89, FmTile, FmTile);
+
+		mgr.AddField(fmField[c][FmButton] = new ModernTextButton(400, x, w, 56, "CHANGE", evFilamentChange, (int)c, glcd19x21));
+	}
+
+	// MMU: one wide NOZZLE tile across all five columns
+	const PixelNumber left = ControlX(98), right = ControlX(98 + 4 * 140) + w;
+	DisplayField::SetDefaultFont(glcd19x21);
+	DisplayField::SetDefaultColours(FmMuted, FmTile);
+	mgr.AddField(fmMmuLabel = new StaticTextField(101, left + 16, 120, TextAlignment::Left, "NOZZLE"));
+	DisplayField::SetDefaultColours(accent, FmTile);
+	mgr.AddField(fmMmuActive = new StaticTextField(101, right - 176, 160, TextAlignment::Right, ""));
+	DisplayField::SetDefaultFont(glcd28x32);
+	DisplayField::SetDefaultColours(FmText, FmTile);
+	mgr.AddField(fmMmuTemp = new StaticTextField(95, left + 150, right - left - 300, TextAlignment::Centre, ""));
+	mgr.AddField(fmMmuCard = new ModernCard(84, left, right - left, 55, FmTile, FmTile, false));
+	fmMmuLabel->Show(false); fmMmuActive->Show(false); fmMmuTemp->Show(false); fmMmuCard->Show(false);
+
+	// Paging tiles, same place and size as on CONTROL > TOOLS
+	DisplayField::SetDefaultColours(FmText, FmTile);
+	mgr.AddField(fmPageUpButton = new ModernIconButton(188, ControlX(736), ControlW(54), 118, IconUp, evFilamentPageUp));
+	mgr.AddField(fmPageDownButton = new ModernIconButton(312, ControlX(736), ControlW(54), 118, IconDown, evFilamentPageDown));
+
+	filamentRoot = mgr.GetRoot();
+	mgr.SetRoot(filamentRoot);
+	AddTopTab(0, 1, "FILAMENT MANAGEMENT", evFilamentTopTab);
+	AddTopTabBackground();
+	mgr.AddField(new ModernCard(0, masterTabWidth, DisplayX - masterTabWidth, DisplayY, FmPageBg, FmPageBg));
+	filamentRoot = mgr.GetRoot();
+	DisplayField::SetDefaultFont(DEFAULT_FONT);
+	for (unsigned int i = 0; i < FmMaxSlots; ++i)
+	{
+		fmJobFilament[i] = -1.0f;
+	}
+}
+
+// Extra buttons of the shared popup used by the material and colour pickers
+static void CreateFilamentPopupFields(PopupWindow *popup)
+{
+	DisplayField::SetDefaultColours(FmDarkText, FmBlue);
+	fmPopupUnloadButton = new ModernTextButton(332, 102, 110, 78, "UNLOAD", evFilamentUnload, 0, glcd19x21);
+	fmPopupUnloadButton->SetBold(true);
+	fmPopupUnloadButton->Show(false);
+	popup->AddField(fmPopupUnloadButton);
+	DisplayField::SetDefaultColours(FmText, FmTile);
+	fmPopupUpButton = new ModernIconButton(145, 545, 70, 60, IconUp, evFilamentPopupPage, -1);
+	fmPopupDownButton = new ModernIconButton(220, 545, 70, 60, IconDown, evFilamentPopupPage, 1);
+	fmPopupUpButton->Show(false);
+	fmPopupDownButton->Show(false);
+	popup->AddField(fmPopupUpButton);
+	popup->AddField(fmPopupDownButton);
+}
+
+// Muted one-line text under the title, and the page counter under the arrows. They reuse two of the popup's
+// information fields; ResetStandardPopupContent() puts them back.
+static __attribute__((noinline)) void FmPopupLine(StaticTextField *field, PixelNumber x, PixelNumber y, PixelNumber width, const char *text)
+{
+	field->SetPositionAndWidth(x, width);
+	field->SetPosition(x, y);
+	field->SetColours(FmMuted, FmPageBg);
+	field->SetValue(text, true);
+	field->Show(true);
+}
+
+static void FmPopupPaging(unsigned int pages)
+{
+	if (fmPopupPage >= pages) fmPopupPage = (pages == 0) ? 0 : pages - 1;
+	fmPopupUpButton->Show(pages > 1 && fmPopupPage > 0);
+	fmPopupDownButton->Show(pages > 1 && fmPopupPage + 1 < pages);
+	if (pages > 1)
+	{
+		fmPopupPageText.printf("%u / %u", fmPopupPage + 1, pages);
+		FmPopupLine(standardPopupInfoFields[1], 545, 295, 70, fmPopupPageText.c_str());
+	}
+}
+
+static void FmBuildMaterialList()
+{
+	fmPopupListCount = 0;
+	const bool panel = FmPanelMode();
+	for (unsigned int i = 0; i < FmNumMaterials; ++i)
+	{
+		if (panel || (fmFolderMask & (1u << i)) != 0)
+		{
+			fmPopupList[fmPopupListCount++] = (uint8_t)i;
+		}
+	}
+	if (!panel)
+	{
+		for (unsigned int i = 0; i < fmFolderExtraCount; ++i)
+		{
+			fmPopupList[fmPopupListCount++] = (uint8_t)(FmExtraBase + i);
+		}
+	}
+}
+
+static void FmOpenMaterialPopup()
+{
+	const bool panel = FmPanelMode();
+	standardPopupContext = StandardPopupContext::FilamentMaterial;
+	fmPopupTitleText.printf("FILAMENT T%d", fmPopupTool);
+	ConfigureStandardPopupTitle(fmPopupTitleText.c_str(), true);
+	ResetStandardPopupContent();
+
+	const char * const loaded = FmSlotMaterialName(fmPopupTool);
+	FmBuildMaterialList();
+	if (!panel && fmPopupListCount == 0)
+	{
+		FmPopupLine(standardPopupInfoFields[0], 70, 180, 520,
+			fmFoldersLoaded ? "No folders found in 0:/filaments" : "Reading 0:/filaments ...");
+		standardPopupConfirmButton->Show(false);
+	}
+	else
+	{
+		fmPopupInfoText.printf("Loaded: %s", (loaded != nullptr) ? loaded : "---");
+		FmPopupLine(standardPopupInfoFields[0], 70, 100, 520, fmPopupInfoText.c_str());
+		const unsigned int pages = (fmPopupListCount + FmPopupItemsPerPage - 1) / FmPopupItemsPerPage;
+		FmPopupPaging(pages);
+		static const PixelNumber xs[3] = { 45, 205, 365 };
+		static const PixelNumber ys[2] = { 145, 220 };
+		standardPopupChoiceCount = 0;
+		for (unsigned int i = 0; i < FmPopupItemsPerPage; ++i)
+		{
+			const unsigned int item = fmPopupPage * FmPopupItemsPerPage + i;
+			if (item >= fmPopupListCount) break;
+			ModernTextButton * const b = standardPopupChoiceButtons[i];
+			b->SetPosition(xs[i % 3], ys[i / 3]);
+			b->SetPositionAndWidth(xs[i % 3], 150);
+			b->SetColours(FmText, FmTile);
+			b->SetText(FmMaterialName(fmPopupList[item]));
+			b->SetEvent(evStandardPopupChoice, fmPopupList[item]);
+			standardPopupChoiceValues[i] = fmPopupList[item];
+			b->Show(true);
+			++standardPopupChoiceCount;
+		}
+		RefreshStandardPopupChoiceBorders(fmPendingMaterial);
+	}
+
+	// UNLOAD (MACROS) or CLEAR (PANEL) only when something is in the slot: then the three-action layout
+	const bool withUnload = (loaded != nullptr);
+	fmPopupUnloadButton->SetText(panel ? "CLEAR" : "UNLOAD");
+	fmPopupUnloadButton->Show(withUnload);
+	if (withUnload)
+	{
+		standardPopupCancelButton->SetPosition(275, 332);
+		standardPopupConfirmButton->SetPosition(448, 332);
+	}
+	mgr.SetPopup(standardPopup, AutoPlace, AutoPlace);
+}
+
+static __attribute__((noinline)) void FmRefreshColourBorders()
+{
+	for (size_t i = 0; i < standardPopupChoiceCount; ++i)
+	{
+		ModernTextButton * const b = standardPopupChoiceButtons[i];
+		const int value = standardPopupChoiceValues[i];
+		const Colour c = fmPalette[value];
+		const bool dark = ((c >> 11) + ((c >> 5) & 0x3F) / 2 + (c & 0x1F)) < 12;
+		if (value == fmPendingColour)
+		{
+			b->SetBorderColour(FmText);								// light outline: an accent one would vanish on orange/red
+			b->SetBorderVisible(true);
+		}
+		else
+		{
+			b->SetBorderColour(value == FmNaturalColour ? FmMuted : FmBorder);
+			b->SetBorderVisible(dark || value == FmNaturalColour);
+		}
+	}
+}
+
+static void FmOpenColourPopup()
+{
+	standardPopupContext = StandardPopupContext::FilamentColour;
+	fmPopupTitleText.printf("COLOR T%d", fmPopupTool);
+	ConfigureStandardPopupTitle(fmPopupTitleText.c_str(), false);
+	ResetStandardPopupContent();
+
+	const char *name = (fmFlow == FmFlow::ColourOnly) ? FmSlotMaterialName(fmPopupTool) : FmMaterialName(fmPendingMaterial);
+	FmPopupLine(standardPopupInfoFields[0], 70, 100, 520, (name != nullptr) ? name : "");
+	FmPopupPaging(FmPaletteSize / FmColoursPerPage);
+
+	static const PixelNumber xs[4] = { 45, 170, 295, 420 };
+	static const PixelNumber ys[2] = { 145, 220 };
+	standardPopupChoiceCount = FmColoursPerPage;
+	for (unsigned int i = 0; i < FmColoursPerPage; ++i)
+	{
+		const int value = (int)(fmPopupPage * FmColoursPerPage + i);
+		ModernTextButton * const b = standardPopupChoiceButtons[i];
+		b->SetPosition(xs[i % 4], ys[i / 4]);
+		b->SetPositionAndWidth(xs[i % 4], 100);
+		b->SetColours(fmPalette[value], fmPalette[value]);
+		b->SetText("");
+		b->SetEvent(evStandardPopupChoice, value);
+		standardPopupChoiceValues[i] = value;
+		b->Show(true);
+	}
+	FmRefreshColourBorders();
+	mgr.SetPopup(standardPopup, AutoPlace, AutoPlace);
+}
+
+// The colour step is done (colourChosen = tick, false = X which keeps the colour). Store and, in MACROS mode, load.
+static void FmFinishFlow(bool colourChosen)
+{
+	const int tool = fmPopupTool;
+	if (tool >= 0 && tool < (int)FmMaxSlots)
+	{
+		if (colourChosen && fmPendingColour >= 0)
+		{
+			nvData.SetSlotColour((size_t)tool, (uint8_t)fmPendingColour);
+		}
+		if (fmFlow == FmFlow::Change)
+		{
+			if (FmPanelMode())
+			{
+				if (fmPendingMaterial >= 0 && fmPendingMaterial < (int)FmNumMaterials)
+				{
+					nvData.SetSlotMaterial((size_t)tool, (uint8_t)fmPendingMaterial);
+				}
+			}
+			else if (fmPendingMaterial != FmSlotMaterialCode(tool))
+			{
+				const char * const name = FmMaterialName(fmPendingMaterial);
+				if (name != nullptr)
+				{
+					// RRF way: select the tool, unload what is in it (its unload.g), then load the new one (its load.g).
+					// The filament macros do the heating.
+					if (tool != currentTool) SerialIo::Sendf("T%d\n", tool);
+					if (FmSlotMaterialName(tool) != nullptr) SerialIo::Sendf("M702\n");
+					SerialIo::Sendf("M701 S\"%s\"\n", name);
+					RequestExtruderUpdate(120000);
+				}
+			}
+		}
+		if (nvData.IsSaveNeeded())
+		{
+			SaveSettings();
+		}
+	}
+	CloseStandardPopup();
+	mgr.Refresh(FilamentRefreshPage());
+}
+
+static void FmUnload()
+{
+	const int tool = fmPopupTool;
+	if (tool >= 0 && tool < (int)FmMaxSlots)
+	{
+		if (FmPanelMode())
+		{
+			nvData.SetSlotMaterial((size_t)tool, FmNone);
+			if (nvData.IsSaveNeeded()) SaveSettings();
+		}
+		else
+		{
+			if (tool != currentTool) SerialIo::Sendf("T%d\n", tool);
+			SerialIo::Sendf("M702\n");
+			RequestExtruderUpdate(60000);
+		}
+	}
+	CloseStandardPopup();
+	mgr.Refresh(FilamentRefreshPage());
+}
+
+// Material popup for the tool in a column (CHANGE/LOAD in MACROS mode, the material tile in PANEL mode)
+static void FmStartChange(unsigned int column)
+{
+	if (column >= FmColumns || fmColumnTool[column] < 0) return;
+	if (!FmPanelMode() && IsModernPageLockedByPrint(true))
+	{
+		ShowModernAlert("Filament change is unavailable while the print is running.");
+		return;
+	}
+	if (!FmPanelMode() && GetStatus() == OM::PrinterStatus::paused && fmColumnTool[column] != currentTool)
+	{
+		// A tool change (T<n>) in the middle of a paused print would park the active tool and pick up another one
+		ShowModernAlert("While the print is paused only the filament of the active tool can be changed.");
+		return;
+	}
+	fmPopupTool = fmColumnTool[column];
+	fmFlow = FmFlow::Change;
+	fmPendingMaterial = FmSlotMaterialCode(fmPopupTool);
+	const uint8_t colour = nvData.GetSlotColour((size_t)fmPopupTool);
+	fmPendingColour = (colour == FmNone) ? -1 : colour;
+	if (!FmPanelMode() && (!fmFoldersLoaded || SystemTick::GetTickCount() - fmFoldersRequestedAt > 30000))
+	{
+		FmRequestFolders();							// read the folder list fresh; the popup updates when it arrives
+	}
+	fmPopupPage = 0;
+	if (fmPendingMaterial >= 0)
+	{
+		FmBuildMaterialList();
+		for (unsigned int i = 0; i < fmPopupListCount; ++i)
+		{
+			if (fmPopupList[i] == fmPendingMaterial) { fmPopupPage = i / FmPopupItemsPerPage; break; }
+		}
+	}
+	FmOpenMaterialPopup();
+}
+
+// Colour popup only (material tile in MACROS mode)
+static void FmStartColourOnly(unsigned int column)
+{
+	if (column >= FmColumns || fmColumnTool[column] < 0) return;
+	fmPopupTool = fmColumnTool[column];
+	fmFlow = FmFlow::ColourOnly;
+	const uint8_t colour = nvData.GetSlotColour((size_t)fmPopupTool);
+	fmPendingColour = (colour == FmNone) ? -1 : colour;
+	fmPopupPage = (fmPendingColour >= 0) ? (unsigned int)fmPendingColour / FmColoursPerPage : 0;
+	FmOpenColourPopup();
+}
+
+// ---- SYSTEM > SETTINGS: ORIENTATION popup (replaces the MIRROR DISPLAY and INVERT DISPLAY tiles)
+static void OpenSettingsOrientationPopup()
+{
+	static const char * const labels[4] = { "NORMAL", "MIRROR", "INVERT", "BOTH" };
+	static const PixelNumber xs[4] = { 170, 340, 170, 340 };
+	static const PixelNumber ys[4] = { 145, 145, 220, 220 };
+	standardPopupContext = StandardPopupContext::SettingsOrientation;
+	ConfigureStandardPopupTitle("ORIENTATION", true);
+	ResetStandardPopupContent();
+	standardPopupChoiceCount = 4;
+	for (size_t i = 0; i < 4; ++i)
+	{
+		ModernTextButton * const b = standardPopupChoiceButtons[i];
+		b->SetPosition(xs[i], ys[i]);
+		b->SetPositionAndWidth(xs[i], 150);
+		b->SetColours(FmText, FmTile);
+		b->SetText(labels[i]);
+		b->SetEvent(evStandardPopupChoice, (int)i);
+		standardPopupChoiceValues[i] = (int)i;
+		b->Show(true);
+	}
+	settingsPendingOrientation = (int)GetDisplayOrientationChoice();
+	RefreshStandardPopupChoiceBorders(settingsPendingOrientation);
+	mgr.SetPopup(standardPopup, AutoPlace, AutoPlace);
+}
+
+// ---- SYSTEM > SETTINGS: FILAMENT mode popup (AUTO / PANEL / MACROS)
+static void OpenSettingsFilamentModePopup()
+{
+	static const char * const labels[3] = { "AUTO", "PANEL", "MACROS" };
+	standardPopupContext = StandardPopupContext::SettingsFilamentMode;
+	ConfigureStandardPopupTitle("FILAMENT", true);
+	ResetStandardPopupContent();
+	FmPopupLine(standardPopupInfoFields[0], 70, 100, 520, "AUTO = MACROS if 0:/filaments has folders");
+	standardPopupChoiceCount = 3;
+	for (size_t i = 0; i < 3; ++i)
+	{
+		ModernTextButton * const b = standardPopupChoiceButtons[i];
+		const PixelNumber x = 85 + i * 170;
+		b->SetPosition(x, 180);
+		b->SetPositionAndWidth(x, 150);
+		b->SetColours(FmText, FmTile);
+		b->SetText(labels[i]);
+		b->SetEvent(evStandardPopupChoice, (int)i);
+		standardPopupChoiceValues[i] = (int)i;
+		b->Show(true);
+	}
+	const uint8_t mode = nvData.GetFilamentMode();
+	settingsPendingFilamentMode = (mode == 0xFF) ? 0 : (mode == 1) ? 1 : 2;
+	RefreshStandardPopupChoiceBorders(settingsPendingFilamentMode);
+	mgr.SetPopup(standardPopup, AutoPlace, AutoPlace);
+}
+
 static void CreateModernStandardPopup()
 {
 	const Colour pageBg = UTFT::fromRGB(18, 22, 28);
@@ -5959,6 +6833,7 @@ static void CreateModernStandardPopup()
 	standardPopupTrashButton = new ModernIconButton(332, 102, 110, 78, IconTrash, evStatusJobDeleteOpen);
 	standardPopupTrashButton->Show(false);
 	standardPopup->AddField(standardPopupTrashButton);
+	CreateFilamentPopupFields(standardPopup);
 	DisplayField::SetDefaultColours(UTFT::fromRGB(36,36,36), cancelRed);
 	standardPopupCancelButton = new ModernIconButton(332, 189, 110, 78, IconCancel, evStandardPopupCancel);
 	standardPopup->AddField(standardPopupCancelButton);
@@ -6016,6 +6891,18 @@ static void ResetStandardPopupContent()
 	if (filasnakeBoard != nullptr)
 	{
 		filasnakeBoard->Show(false);
+	}
+	// FILAMENT MANAGEMENT borrows these: hide its buttons and give the information fields back their normal look
+	if (fmPopupUnloadButton != nullptr)
+	{
+		fmPopupUnloadButton->Show(false);
+		fmPopupUpButton->Show(false);
+		fmPopupDownButton->Show(false);
+	}
+	for (size_t i = 0; i < ARRAY_SIZE(standardPopupInfoFields); ++i)
+	{
+		standardPopupInfoFields[i]->SetPositionAndWidth(70, 520);
+		standardPopupInfoFields[i]->SetColours(UTFT::fromRGB(229, 232, 236), UTFT::fromRGB(28, 34, 43));
 	}
 }
 
@@ -6363,6 +7250,7 @@ static void CreateMainPages(const ColourScheme& colours)
 	CreateStatusJobStatusTabFields(colours);
 	CreateStatusTuneTabFields(colours);
 	CreateStatusJobTabFields(colours);
+	CreateFilamentPageFields();
 #endif
 #if DISPLAY_X != 800
 	AddStatusSubTabs(statusObjectsRoot);
@@ -7016,6 +7904,19 @@ namespace UI
 					PrintInProgress() ? printingFile.c_str() : machineName.c_str());
 #endif
 			break;
+#if DISPLAY_X == 800
+		case evTabFilament:
+			mgr.SetRoot(filamentRoot);
+			currentUiPage = UiPage::FilamentManagement;
+			RequestExtruderUpdate(0);					// loaded filament names
+			if (nvData.GetFilamentMode() == 0xFF && !fmFoldersPending)
+			{
+				FmRequestFolders();						// AUTO: MACROS mode if 0:/filaments has folders, otherwise PANEL
+			}
+			(void)FilamentRefreshPage();				// the full repaint below draws it
+			fmLastRefresh = SystemTick::GetTickCount();
+			break;
+#endif
 		case evTabSystem:
 			mgr.SetRoot(messageRoot);
 #if DISPLAY_X == 800
@@ -7158,6 +8059,113 @@ namespace UI
 #endif
 	}
 
+	// ---- FILAMENT MANAGEMENT data from RRF
+	bool IsFilamentPageShown()
+	{
+#if DISPLAY_X == 800
+		return currentUiPage == UiPage::FilamentManagement;
+#else
+		return false;
+#endif
+	}
+
+	void UpdateExtruderFilament(size_t extruder, const char *name)
+	{
+#if DISPLAY_X == 800
+		if (extruder < FmMaxSlots)
+		{
+			fmExtruderFilament[extruder].copy(name);
+		}
+#else
+		UNUSED(extruder); UNUSED(name);
+#endif
+	}
+
+	void BeginFilamentMonitors()
+	{
+#if DISPLAY_X == 800
+		memset(fmMonitor, 0, sizeof(fmMonitor));
+#endif
+	}
+
+	void UpdateFilamentMonitorStatus(size_t extruder, const char *status)
+	{
+#if DISPLAY_X == 800
+		if (extruder < FmMaxSlots)
+		{
+			fmMonitor[extruder] = (strcmp(status, "ok") == 0) ? 1 : (strcmp(status, "noFilament") == 0) ? 2 : 3;
+		}
+#else
+		UNUSED(extruder); UNUSED(status);
+#endif
+	}
+
+	void BeginJobFilament()
+	{
+#if DISPLAY_X == 800
+		for (size_t i = 0; i < FmMaxSlots; ++i)
+		{
+			fmJobFilament[i] = -1.0f;
+		}
+#endif
+	}
+
+	void UpdateJobFilament(size_t extruder, float mm)
+	{
+#if DISPLAY_X == 800
+		if (extruder < FmMaxSlots)
+		{
+			fmJobFilament[extruder] = mm;
+		}
+#else
+		UNUSED(extruder); UNUSED(mm);
+#endif
+	}
+
+	void BeginFilamentFolders()
+	{
+#if DISPLAY_X == 800
+		fmFolderMask = 0;
+		fmFolderExtraCount = 0;
+#endif
+	}
+
+	void AddFilamentFolder(const char *name)
+	{
+#if DISPLAY_X == 800
+		const int builtIn = FmFindMaterial(name);
+		if (builtIn >= 0)
+		{
+			fmFolderMask |= (1u << builtIn);
+		}
+		else if (fmFolderExtraCount < FmMaxExtraFolders && strlen(name) <= fmFolderExtra[0].Capacity())	// a cut-off name would make M701 fail
+		{
+			fmFolderExtra[fmFolderExtraCount++].copy(name);
+		}
+#else
+		UNUSED(name);
+#endif
+	}
+
+	void EndFilamentFolders(bool ok)
+	{
+#if DISPLAY_X == 800
+		fmFoldersLoaded = true;
+		fmFoldersPending = false;
+		fmAnyFolders = ok && (fmFolderMask != 0 || fmFolderExtraCount != 0);	// decides the mode while it is AUTO
+		if (standardPopupContext == StandardPopupContext::FilamentMaterial && mgr.IsPopupActive(standardPopup))
+		{
+			FmOpenMaterialPopup();						// the popup was waiting for this list
+		}
+		else if (currentUiPage == UiPage::FilamentManagement)
+		{
+			mgr.Refresh(FilamentRefreshPage());
+		}
+#else
+		UNUSED(ok);
+#endif
+	}
+
 	// Return true if polling should be performed
 	bool IsJobStatusPageShown()
 	{
@@ -7222,6 +8230,22 @@ namespace UI
 			controlToolsLastTemperatureRefresh = now;
 			RefreshControlToolCurrentTemperatures();
 			mgr.Refresh(false);
+		}
+		if (fmFoldersPending && now - fmFoldersRequestedAt > 8000)
+		{
+			// No answer to M20 (no SD card, or an older RRF): stop waiting. The first-use mode choice is not made from this;
+			// it waits for a real answer.
+			fmFoldersPending = false;
+			fmFoldersLoaded = true;
+			if (standardPopupContext == StandardPopupContext::FilamentMaterial && mgr.IsPopupActive(standardPopup))
+			{
+				FmOpenMaterialPopup();
+			}
+		}
+		if (currentUiPage == UiPage::FilamentManagement && now - fmLastRefresh >= 1000 && !mgr.IsPopupActive(standardPopup))
+		{
+			fmLastRefresh = now;
+			mgr.Refresh(FilamentRefreshPage());
 		}
 		if (currentUiPage == UiPage::StatusJobStatus && now - jobStatusLastLiveRefresh >= 1000)
 		{
@@ -7503,10 +8527,13 @@ namespace UI
 			if (currentUiPage == UiPage::StatusTune)
 			{
 				RefreshTuneToolRows();
+				RefreshTuneGeneralFans();
 			}
 			else if (currentUiPage == UiPage::StatusJobStatus)
 			{
 				RefreshJobStatusTilesByType(JobStatusTileType::FanPart);
+				RefreshJobStatusTilesByType(JobStatusTileType::FanAux);
+				RefreshJobStatusTilesByType(JobStatusTileType::FanCha);
 			}
 		}
 #else
@@ -7526,6 +8553,7 @@ namespace UI
 			tuneFanValid[fan] = false;
 			tuneFanThermostatic[fan] = false;
 			tuneFanNames[fan].Clear();
+			tuneFanActual[fan] = -1;
 		}
 
 		if (currentUiPage == UiPage::StatusJobStatus)
@@ -7534,6 +8562,31 @@ namespace UI
 			RefreshJobStatusTilesByType(JobStatusTileType::FanAux);
 			RefreshJobStatusTilesByType(JobStatusTileType::FanCha);
 		}
+#endif
+	}
+
+	// Real fan output (fans[].actualValue). Only thermostatic fans show it (see GeneralFanPercent).
+	void UpdateFanActualPercent(size_t fanIndex, int percent)
+	{
+#if DISPLAY_X == 800
+		if (fanIndex < TuneMaxFans && tuneFanActual[fanIndex] != percent)
+		{
+			tuneFanActual[fanIndex] = static_cast<int8_t>(constrain<int>(percent, 0, 100));
+			if (tuneFanThermostatic[fanIndex])
+			{
+				if (currentUiPage == UiPage::StatusJobStatus)
+				{
+					RefreshJobStatusTilesByType(JobStatusTileType::FanAux);
+					RefreshJobStatusTilesByType(JobStatusTileType::FanCha);
+				}
+				else if (currentUiPage == UiPage::StatusTune)
+				{
+					RefreshTuneGeneralFans();
+				}
+			}
+		}
+#else
+		UNUSED(fanIndex); UNUSED(percent);
 #endif
 	}
 
@@ -8341,6 +9394,8 @@ namespace UI
 		case evStatusObjects:
 		case evSystemConsole:
 		case evSystemSettings:
+		case evTabFilament:
+		case evFilamentTopTab:
 #endif
 
 		case evExtrudeAmount:
@@ -8367,9 +9422,39 @@ namespace UI
 	}
 
 #if DISPLAY_X == 800
+	// PANEL mode button on FILAMENT MANAGEMENT: go to CONTROL > EXTRUDE showing the page with this tool
+	static void OpenExtrudePageForTool(int toolIndex)
+	{
+		if (IsModernPageLockedByPrint(true))
+		{
+			ShowModernAlert("EXTRUDE is unavailable while the print is running.");
+			return;
+		}
+		if (currentTab != tabControl)
+		{
+			if (currentTab != nullptr) currentTab->Press(false, 0);
+			tabControl->Press(true, 0);
+			currentTab = tabControl;
+		}
+		mgr.ClearAllPopups();
+		unsigned int ordinal = 0;
+		OM::IterateToolsWhile([&](OM::Tool*& tool, size_t) {
+			if (tool != nullptr && tool->index == toolIndex) return false;
+			++ordinal;
+			return true;
+		});
+		controlExtrudeToolPage = ordinal / ControlExtrudeToolsPerPage;
+		mgr.SetRoot(controlExtrusionRoot);
+		currentUiPage = UiPage::ControlExtrusion;
+		RefreshControlExtrudeTools();
+		RefreshControlExtrudeSelections();
+		SyncTopTabHighlight();
+		mgr.Refresh(true);
+	}
+
 	static bool KeepModernButtonHighlighted(ButtonBase *button)
 	{
-		if (button == tabControl || button == tabStatus || button == tabSystem)
+		if (button == tabControl || button == tabStatus || button == tabSystem || (button != nullptr && button == tabFilament))
 		{
 			return true;
 		}
@@ -9272,9 +10357,96 @@ namespace UI
 			case evSettingsVolumeOpen:
 				mgr.Press(bp, false); currentButton.Clear(); OpenSettingsVolumePopup(); break;
 
+			// ---- FILAMENT MANAGEMENT
+			case evTabFilament:
+				if (ChangePage(f))
+				{
+					currentButton.Clear();
+				}
+				break;
+
+			case evFilamentTopTab:
+				currentButton.Clear();
+				break;
+
+			case evFilamentPageUp:
+			case evFilamentPageDown:
+				if (ev == evFilamentPageUp) { if (fmPage > 0) --fmPage; } else { ++fmPage; }
+				(void)FilamentRefreshPage();
+				mgr.Refresh(true);
+				currentButton.Clear();
+				break;
+
+			case evFilamentChange:
+				mgr.Press(bp, false);
+				currentButton.Clear();
+				if (FmPanelMode())
+				{
+					const int col = bp.GetIParam();
+					if (col >= 0 && col < (int)FmColumns && fmColumnTool[col] >= 0)
+					{
+						OpenExtrudePageForTool(fmColumnTool[col]);		// PANEL mode: load/unload by hand
+					}
+				}
+				else
+				{
+					FmStartChange((unsigned int)bp.GetIParam());
+				}
+				break;
+
+			case evFilamentTileTap:
+				currentButton.Clear();
+				if (FmPanelMode())
+				{
+					FmStartChange((unsigned int)bp.GetIParam());
+				}
+				else
+				{
+					FmStartColourOnly((unsigned int)bp.GetIParam());
+				}
+				break;
+
+			case evFilamentPopupPage:
+				if (bp.GetIParam() > 0 || fmPopupPage > 0)
+				{
+					fmPopupPage = (unsigned int)((int)fmPopupPage + bp.GetIParam());
+					if (standardPopupContext == StandardPopupContext::FilamentMaterial) FmOpenMaterialPopup();
+					else if (standardPopupContext == StandardPopupContext::FilamentColour) FmOpenColourPopup();
+				}
+				currentButton.Clear();
+				break;
+
+			case evFilamentUnload:
+				currentButton.Clear();
+				FmUnload();
+				break;
+
+			case evSettingsOrientationOpen:
+				mgr.Press(bp, false); currentButton.Clear(); OpenSettingsOrientationPopup(); break;
+
+			case evSettingsFilamentModeToggle:
+				mgr.Press(bp, false); currentButton.Clear(); OpenSettingsFilamentModePopup(); break;
+
 			case evStandardPopupChoice:
 				switch (standardPopupContext)
 				{
+				case StandardPopupContext::FilamentMaterial:
+					fmPendingMaterial = bp.GetIParam();
+					RefreshStandardPopupChoiceBorders(fmPendingMaterial);
+					break;
+				case StandardPopupContext::FilamentColour:
+					fmPendingColour = bp.GetIParam();
+					FmRefreshColourBorders();
+					mgr.Refresh(false);
+					break;
+				case StandardPopupContext::SettingsOrientation:
+					settingsPendingOrientation = bp.GetIParam();
+					RefreshStandardPopupChoiceBorders(settingsPendingOrientation);
+					break;
+				case StandardPopupContext::SettingsFilamentMode:
+					settingsPendingFilamentMode = bp.GetIParam();
+					RefreshStandardPopupChoiceBorders(settingsPendingFilamentMode);
+					break;
 				case StandardPopupContext::SettingsVolume:
 					settingsPendingVolume = bp.GetIParam();
 					RefreshStandardPopupChoiceBorders(settingsPendingVolume);
@@ -9442,6 +10614,44 @@ namespace UI
 					currentButton.Clear();
 					FactoryReset();
 					break;
+				case StandardPopupContext::FilamentMaterial:
+					if (fmPendingMaterial >= 0)						// material chosen: on to the colour
+					{
+						fmPopupPage = (fmPendingColour >= 0) ? (unsigned int)fmPendingColour / FmColoursPerPage : 0;
+						FmOpenColourPopup();
+					}
+					break;
+				case StandardPopupContext::FilamentColour:
+					FmFinishFlow(true);
+					break;
+				case StandardPopupContext::SettingsFilamentMode:
+					{
+						static const uint8_t modes[3] = { 0xFF, 1, 0 };		// AUTO, PANEL, MACROS
+						CloseStandardPopup();
+						if (settingsPendingFilamentMode >= 0 && settingsPendingFilamentMode < 3)
+						{
+							nvData.SetFilamentMode(modes[settingsPendingFilamentMode]);
+						}
+						if (nvData.IsSaveNeeded())
+						{
+							SaveSettings();
+						}
+						if (nvData.GetFilamentMode() != 1 && !fmFoldersPending)
+						{
+							FmRequestFolders();						// AUTO and MACROS need the folder list
+						}
+						RefreshModernSettingsPage();
+						mgr.Refresh(false);
+					}
+					break;
+				case StandardPopupContext::SettingsOrientation:
+					CloseStandardPopup();
+					if (SetDisplayOrientationChoice((unsigned int)settingsPendingOrientation))
+					{
+						CalibrateTouch();							// the touch panel must follow the new orientation
+					}
+					SaveSettings();
+					break;
 				case StandardPopupContext::FilasnakeConfirm:
 					OpenFilasnakePopup();
 					break;
@@ -9581,6 +10791,19 @@ namespace UI
 				break;
 
 			case evStandardPopupCancel:
+				if (standardPopupContext == StandardPopupContext::FilamentColour)
+				{
+					if (fmFlow == FmFlow::ColourOnly)
+					{
+						CloseStandardPopup();
+					}
+					else
+					{
+						FmFinishFlow(false);						// X on the colour = keep the colour; the material choice stands
+					}
+					currentButton.Clear();
+					break;
+				}
 				if (standardPopupContext == StandardPopupContext::M291Confirm ||
 					standardPopupContext == StandardPopupContext::M291ConfirmControls ||
 					standardPopupContext == StandardPopupContext::M291Choices ||
@@ -10603,6 +11826,9 @@ namespace UI
 			case evTabStatus:
 			case evTabMsg:
 			case evTabSetup:
+#if DISPLAY_X == 800
+			case evTabFilament:
+#endif
 				StopAdjusting();
 				TouchBeep();
 				{
@@ -11278,7 +12504,7 @@ namespace UI
 	void SetToolExtruder(size_t toolIndex, uint8_t extruder)
 	{
 		OM::Tool *tool = OM::GetOrCreateTool(toolIndex);
-		if (tool != nullptr)
+		if (tool != nullptr && extruder < 16)			// ExtrudersBitmap holds 16 extruders
 		{
 			tool->extruders.SetBit(extruder);
 #if DISPLAY_X == 800

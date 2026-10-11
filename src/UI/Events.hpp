@@ -200,6 +200,19 @@ enum Event : uint8_t
 	evFilasnakeDir,		// iParam = direction 0 up, 1 right, 2 down, 3 left
 	evFilasnakeGo,
 
+	// FILAMENT MANAGEMENT master page. Appended so existing event values stay stable.
+	evTabFilament,				// rail button
+	evFilamentTopTab,			// the single top tab of the page
+	evFilamentPageUp, evFilamentPageDown,
+	evFilamentChange,			// bottom button of a column (CHANGE / LOAD / EXTRUDE); iParam = column
+	evFilamentTileTap,			// material tile of a column; iParam = column
+	evFilamentPopupPage,		// page arrows in the material/colour popups; iParam = -1 or +1
+	evFilamentUnload,			// UNLOAD (or CLEAR in panel mode) in the material popup
+
+	// SYSTEM > SETTINGS additions
+	evSettingsOrientationOpen,
+	evSettingsFilamentModeToggle,
+
 };
 
 #endif /* SRC_UI_EVENTS_HPP_ */

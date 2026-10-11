@@ -31,6 +31,9 @@ extern void SaveSettings();
 extern bool IsSaveNeeded();
 extern void MirrorDisplay();
 extern void InvertDisplay();
+extern unsigned int GetDisplayOrientationChoice();				// 0 normal, 1 mirrored, 2 inverted, 3 mirrored + inverted
+extern bool SetDisplayOrientationChoice(unsigned int choice);	// returns true if the orientation changed
+extern void RequestExtruderUpdate(uint32_t followFor);
 extern void LandscapeDisplay(const bool withTouch = true);
 extern void PortraitDisplay(const bool withTouch = true);
 extern void SetBaudRate(uint32_t rate);

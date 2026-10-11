@@ -739,6 +739,11 @@ void ModernTextButton::Refresh(bool full, PixelNumber xOffset, PixelNumber yOffs
 		const PixelNumber ty = top + ((height > fontHeight) ? (height - fontHeight)/2 : 0);
 		lcd.setTextPos(tx, ty, right - 3);
 		lcd.printf("%s", text);
+		if (bold)
+		{
+			lcd.setTextPos(tx + 1, ty, right - 2);
+			lcd.printf("%s", text);
+		}
 		lcd.setTransparentBackground(false);
 	}
 	changed = false;
@@ -1111,6 +1116,31 @@ void ModernMasterNavButton::Refresh(bool full, PixelNumber xOffset, PixelNumber 
 		}
 		break;
 
+	case MasterNavIcon::Filament:
+		// Three filament lanes (ends at the top) merging into one heater block and nozzle, with a drop below it.
+		{
+			const int laneTop = cy - 24;
+			const int joint = cy + 2;
+			for (int lane = -1; lane <= 1; ++lane)
+			{
+				const int lx = cx + lane * 18;
+				lcd.fillCircle(lx, laneTop - 2, 4);
+				lcd.fillRect(lx - 2, laneTop, lx + 2, laneTop + 8);
+				for (int o = -2; o <= 2; ++o)
+				{
+					lcd.drawLine(lx + o, laneTop + 8, cx + o, joint);
+				}
+			}
+			lcd.fillRect(cx - 9, joint, cx + 9, joint + 10);				// heater block
+			for (int row = 0; row < 9; ++row)								// nozzle cone
+			{
+				const int half = 9 - (row * 6) / 9;
+				lcd.fillRect(cx - half, joint + 10 + row, cx + half, joint + 10 + row);
+			}
+			lcd.fillCircle(cx, joint + 25, 3);								// drop
+		}
+		break;
+
 	case MasterNavIcon::Gear:		// (kept as the enumerator name; the SYSTEM tile now shows an open-end spanner)
 	default:
 #if DISPLAY_X == 800
@@ -1194,11 +1224,11 @@ void ModernIconButton::Refresh(bool full, PixelNumber xOffset, PixelNumber yOffs
 		const int cx = static_cast<int>(left + width / 2);
 		const int cy = static_cast<int>(top + height / 2);
 		const int span = static_cast<int>((width < height) ? width : height);
-		const int r = span / 2 - 12;
+		const int r = ((span / 2 - 12) * 3) / 4;						// 25 % smaller than the original glyphs
 		lcd.setColor(fcolour);
 		if (icon == IconCancel)
 		{
-			for (int o = -1; o <= 1; ++o)
+			for (int o = -4; o <= 4; ++o)								// 9 px strokes, 3x the original 3 px
 			{
 				lcd.drawLine(cx - r + o, cy - r, cx + r + o, cy + r);
 				lcd.drawLine(cx - r, cy - r + o, cx + r, cy + r + o);
@@ -1209,7 +1239,7 @@ void ModernIconButton::Refresh(bool full, PixelNumber xOffset, PixelNumber yOffs
 		else
 		{
 			const int shortArm = static_cast<int>(r * 0.7);
-			for (int o = -1; o <= 1; ++o)
+			for (int o = -4; o <= 4; ++o)
 			{
 				lcd.drawLine(cx - shortArm, cy + o, cx - shortArm / 3, cy + r + o);
 				lcd.drawLine(cx - shortArm / 3, cy + r + o, cx + r, cy - r + o);

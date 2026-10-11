@@ -277,6 +277,7 @@ const StringTable LanguageTables[] =
 		"text length is out of range: %ld <= length <= %ld",
  	},
 
+#if DISPLAY_X != 800	// the 800x480 modern UI only uses the English table (strings = &LanguageTables[0]); the others would be ~dead flash
 	// German
 	{
 		// ISO-639.1 language code
@@ -1638,6 +1639,7 @@ const StringTable LanguageTables[] =
 		"text length is out of range: %ld <= length <= %ld",
 	}
 #endif
+#endif	// DISPLAY_X != 800
 };
 
 constexpr unsigned int NumLanguages = sizeof(LanguageTables) / sizeof(LanguageTables[0]);

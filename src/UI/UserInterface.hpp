@@ -52,6 +52,15 @@ namespace UI
 	extern void SetSimulatedTime(uint32_t simulatedTime);
 	extern bool IsSetupTab();
 	extern bool IsJobStatusPageShown();
+	extern bool IsFilamentPageShown();
+	extern void UpdateExtruderFilament(size_t extruder, const char *name);
+	extern void BeginFilamentMonitors();
+	extern void UpdateFilamentMonitorStatus(size_t extruder, const char *status);
+	extern void BeginJobFilament();
+	extern void UpdateJobFilament(size_t extruder, float mm);
+	extern void BeginFilamentFolders();
+	extern void AddFilamentFolder(const char *name);
+	extern void EndFilamentFolders(bool ok);
 	extern bool WantsChamberSensor();
 	extern void SetChamberSensorReading(float temperature, bool valid);
 	extern void Tick();
@@ -89,6 +98,7 @@ namespace UI
 	extern void UpdateCurrentMoveExtrusionRate(float value);
 	extern void UpdateFilamentDiameter(size_t extruder, float value);
 	extern void UpdateFanPercent(size_t fanIndex, int rpm);
+	extern void UpdateFanActualPercent(size_t fanIndex, int percent);
 	extern void UpdateFanName(size_t fanIndex, const char *name);
 	extern void SetFanThermostatic(size_t fanIndex, bool thermostatic);
 	extern void UpdateActiveTemperature(size_t index, int ival);

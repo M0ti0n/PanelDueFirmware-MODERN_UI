@@ -18,7 +18,7 @@
 
 namespace OM
 {
-	typedef Bitmap<uint8_t> ExtrudersBitmap;		// Type of a bitmap representing a set of extruder drive numbers
+	typedef Bitmap<uint16_t> ExtrudersBitmap;		// Type of a bitmap representing a set of extruder drive numbers (16 for MMUs)
 	typedef Bitmap<uint16_t> FansBitmap;			// Type of a bitmap representing a set of fan numbers
 
 	struct ToolHeater

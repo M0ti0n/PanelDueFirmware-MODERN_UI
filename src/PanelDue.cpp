@@ -110,7 +110,7 @@ UTouch touch(23, 24, 22, 21, 20);
 // corresponding define has to be set to (1)
 #define FETCH_BOARDS		(1)
 #define FETCH_DIRECTORIES	(0)
-#define FETCH_FANS			(0)
+#define FETCH_FANS			(1)
 #define FETCH_HEAT			(1)
 #define FETCH_INPUTS		(0)
 #define FETCH_JOB			(1)
@@ -256,6 +256,8 @@ enum ReceivedDataEvent
 	rcvOMKeyLiveJobLayer,
 	rcvOMKeyLiveExtrusionRate,
 	rcvOMKeyLiveChamberSensor,
+	rcvOMKeyFilamentMonitors,
+	rcvOMKeyJobFilament,
 	rcvOMKeyNetwork,
 	rcvOMKeyReply,
 	rcvOMKeyScanner,
@@ -270,6 +272,7 @@ enum ReceivedDataEvent
 	rcvBoardsFirmwareName,
 
 	// Keys for fans response
+	rcvFansActualValue,
 	rcvFansName,
 	rcvFansRequestedValue,
 
@@ -325,6 +328,7 @@ enum ReceivedDataEvent
 	rcvMoveExtrudersFactor,
 	rcvMoveExtrudersFilamentDiameter,
 	rcvMoveExtrudersPressureAdvance,
+	rcvMoveExtrudersFilament,
 	rcvMoveKinematicsName,
 	rcvMoveSpeedFactor,
 	rcvMoveWorkplaceNumber,
@@ -338,6 +342,8 @@ enum ReceivedDataEvent
 	rcvSensorsAnalogLastReading,
 	rcvSensorsAnalogName,
 	rcvSensorsAnalogState,
+	rcvSensorsFilamentMonitorStatus,
+	rcvJobFileFilamentKeyed,
 
 	// Keys for seqs response
 	rcvSeqsBoards,
@@ -358,6 +364,8 @@ enum ReceivedDataEvent
 	rcvSeqsLiveJobLayer,		// not sequence numbers from RRF: used to schedule the extra live requests below
 	rcvSeqsLiveExtrusionRate,
 	rcvSeqsLiveChamberSensor,
+	rcvSeqsFilamentMonitors,
+	rcvSeqsJobFilament,
 
 	// Keys for spindles respons
 	rcvSpindlesActive,
@@ -416,6 +424,7 @@ static FieldTableEntry fieldTable[] =
 	{ rcvBoardsFirmwareName, 			"boards^:firmwareName" },
 
 	// M409 K"fans" response
+	{ rcvFansActualValue,				"fans^:actualValue" },
 	{ rcvFansName,						"fans^:name" },
 	{ rcvFansRequestedValue,			"fans^:requestedValue" },
 
@@ -479,12 +488,14 @@ static FieldTableEntry fieldTable[] =
 	{ rcvMoveExtrudersFactor, 			"move:extruders^:factor" },
 	{ rcvMoveExtrudersFilamentDiameter,	"move:extruders^:filamentDiameter" },
 	{ rcvMoveExtrudersPressureAdvance,	"move:extruders^:pressureAdvance" },
+	{ rcvMoveExtrudersFilament,			"move:extruders^:filament" },
 	{ rcvMoveKinematicsName, 			"move:kinematics:name" },
 
 	// M409 K"move.extruders" response and the two single-value live requests (see the seqs table)
 	{ rcvMoveExtrudersFactor, 			"move.extruders^:factor" },
 	{ rcvMoveExtrudersFilamentDiameter,	"move.extruders^:filamentDiameter" },
 	{ rcvMoveExtrudersPressureAdvance,	"move.extruders^:pressureAdvance" },
+	{ rcvMoveExtrudersFilament,			"move.extruders^:filament" },
 	{ rcvJobLayer,						"job.layer" },
 	{ rcvMoveCurrentExtrusionRateKeyed,	"move.currentMove.extrusionRate" },
 	{ rcvMoveSpeedFactor, 				"move:speedFactor" },
@@ -501,6 +512,10 @@ static FieldTableEntry fieldTable[] =
 	{ rcvSensorsAnalogLastReading,		"sensors.analog^:lastReading" },
 	{ rcvSensorsAnalogName,				"sensors.analog^:name" },
 	{ rcvSensorsAnalogState,			"sensors.analog^:state" },
+
+	// FILAMENT MANAGEMENT page (see the seqs table): runout sensors per extruder and the filament the job needs
+	{ rcvSensorsFilamentMonitorStatus,	"sensors.filamentMonitors^:status" },
+	{ rcvJobFileFilamentKeyed,			"job.file.filament^" },
 
 	// M409 K"seqs" response
 	{ rcvSeqsBoards,					"seqs:boards" },
@@ -635,6 +650,10 @@ static struct Seq {
 	// chamber heater. Asked for once at start-up, then by PollExtraLiveValues() only while it is needed. The fields come in the
 	// order lastReading, name, ..., state; no verbose flag is needed for them.
 	{ .event = rcvOMKeyLiveChamberSensor, .seqid = rcvSeqsLiveChamberSensor, .lastSeq = 0, .state = SeqStateInit, .key = "sensors.analog", .flags = "" },
+	// FILAMENT MANAGEMENT page: filament monitor status per extruder and the length of filament per extruder the current
+	// job needs. Asked for once at start-up, then by PollExtraLiveValues() only while that page is shown.
+	{ .event = rcvOMKeyFilamentMonitors, .seqid = rcvSeqsFilamentMonitors, .lastSeq = 0, .state = SeqStateInit, .key = "sensors.filamentMonitors", .flags = "" },
+	{ .event = rcvOMKeyJobFilament, .seqid = rcvSeqsJobFilament, .lastSeq = 0, .state = SeqStateInit, .key = "job.file.filament", .flags = "" },
 #endif
 #if FETCH_TOOLS
 	{ .event = rcvOMKeyTools, .seqid = rcvSeqsTools, .lastSeq = 0, .state = SeqStateInit, .key = "tools", .flags = "vp" },
@@ -739,27 +758,48 @@ static void UpdateSeq(const ReceivedDataEvent seqid, int32_t val)
 // page is showing because nothing else displays them. The extrusion rate is skipped whenever the regular live
 // request has delivered it recently.
 static uint32_t lastLayerPoll = 0, lastExtrusionPoll = 0, lastChamberSensorPoll = 0;
+static uint32_t lastFilamentMonitorPoll = 0, lastJobFilamentPoll = 0, lastExtruderPoll = 0;
+static uint32_t extruderPollUntil = 0;			// poll move.extruders (loaded filament names) until this time
+static bool extruderPollNow = false;			// ask for move.extruders once, as soon as possible
 static const uint32_t layerPollInterval = 3000, extrusionPollInterval = 1500, regularSampleFreshTime = 2000;
 static const uint32_t chamberSensorPollInterval = 3000;
+static const uint32_t filamentMonitorPollInterval = 3000, jobFilamentPollInterval = 10000, extruderPollInterval = 4000;
+
+// Called by the UI when the FILAMENT MANAGEMENT page opens (followFor = 0) or after a load/unload command was sent
+// (followFor > 0): the loaded filament names are then re-read every few seconds for that long, because the filament
+// macros may take a while (heating, purging, M291 prompts).
+void RequestExtruderUpdate(uint32_t followFor)
+{
+	extruderPollNow = true;
+	const uint32_t now = SystemTick::GetTickCount();
+	if (followFor != 0)
+	{
+		extruderPollUntil = now + followFor;
+	}
+	else
+	{
+		// The page has just opened: read the runout sensors and the job's filament now instead of after the next interval
+		lastFilamentMonitorPoll = now - filamentMonitorPollInterval;
+		lastJobFilamentPoll = now - jobFilamentPollInterval;
+	}
+}
 
 static void PollExtraLiveValues(uint32_t now)
 {
-	if (!UI::IsJobStatusPageShown())
-	{
-		return;
-	}
+	const bool jobPage = PrintInProgress() && UI::IsJobStatusPageShown();
+	const bool filamentPage = UI::IsFilamentPageShown();
 	for (size_t i = 0; i < ARRAY_SIZE(seqs); ++i)
 	{
 		if (seqs[i].state != SeqStateOk)
 		{
 			continue;
 		}
-		if (seqs[i].seqid == rcvSeqsLiveJobLayer && now - lastLayerPoll >= layerPollInterval)
+		if (jobPage && seqs[i].seqid == rcvSeqsLiveJobLayer && now - lastLayerPoll >= layerPollInterval)
 		{
 			seqs[i].state = SeqStateUpdate;
 			lastLayerPoll = now;
 		}
-		else if (seqs[i].seqid == rcvSeqsLiveExtrusionRate && now - lastExtrusionPoll >= extrusionPollInterval
+		else if (jobPage && seqs[i].seqid == rcvSeqsLiveExtrusionRate && now - lastExtrusionPoll >= extrusionPollInterval
 				 && now - lastRegularExtrusionSample >= regularSampleFreshTime)
 		{
 			seqs[i].state = SeqStateUpdate;
@@ -770,6 +810,23 @@ static void PollExtraLiveValues(uint32_t now)
 		{
 			seqs[i].state = SeqStateUpdate;
 			lastChamberSensorPoll = now;
+		}
+		else if (filamentPage && seqs[i].seqid == rcvSeqsFilamentMonitors && now - lastFilamentMonitorPoll >= filamentMonitorPollInterval)
+		{
+			seqs[i].state = SeqStateUpdate;
+			lastFilamentMonitorPoll = now;
+		}
+		else if (filamentPage && seqs[i].seqid == rcvSeqsJobFilament && now - lastJobFilamentPoll >= jobFilamentPollInterval)
+		{
+			seqs[i].state = SeqStateUpdate;
+			lastJobFilamentPoll = now;
+		}
+		else if (seqs[i].event == rcvOMKeyMoveExtruders
+				 && (extruderPollNow || ((int32_t)(extruderPollUntil - now) > 0 && now - lastExtruderPoll >= extruderPollInterval)))
+		{
+			seqs[i].state = SeqStateUpdate;
+			lastExtruderPoll = now;
+			extruderPollNow = false;
 		}
 	}
 }
@@ -954,6 +1011,34 @@ void InvertDisplay()
 {
 	nvData.lcdOrientation = static_cast<DisplayOrientation>(nvData.lcdOrientation ^ (ReverseX | ReverseY));
 	lcd.setOrientation(nvData.lcdOrientation, IS_ER, true);
+}
+
+// The four combinations of MIRROR (flip X) and INVERT (flip X and Y), relative to the default orientation.
+static const uint8_t orientationChoiceMasks[4] = { 0, ReverseX, ReverseX | ReverseY, ReverseY };
+
+unsigned int GetDisplayOrientationChoice()
+{
+	const uint8_t mask = (nvData.lcdOrientation ^ DefaultDisplayOrientAdjust) & (ReverseX | ReverseY);
+	for (unsigned int i = 0; i < ARRAY_SIZE(orientationChoiceMasks); ++i)
+	{
+		if (orientationChoiceMasks[i] == mask)
+		{
+			return i;
+		}
+	}
+	return 0;
+}
+
+bool SetDisplayOrientationChoice(unsigned int choice)
+{
+	if (choice >= ARRAY_SIZE(orientationChoiceMasks) || choice == GetDisplayOrientationChoice())
+	{
+		return false;
+	}
+	const uint8_t wanted = (DefaultDisplayOrientAdjust ^ orientationChoiceMasks[choice]) & (ReverseX | ReverseY);
+	nvData.lcdOrientation = static_cast<DisplayOrientation>((nvData.lcdOrientation & ~(ReverseX | ReverseY)) | wanted);
+	lcd.setOrientation(nvData.lcdOrientation, IS_ER, true);
+	return true;
 }
 
 void LandscapeDisplay(const bool withTouch)
@@ -1376,6 +1461,12 @@ static void ProcessReceivedValue(StringRef id, const char data[], const size_t i
 			case rcvOMKeyTools:
 				lastTool = -1;
 				break;
+			case rcvOMKeyFilamentMonitors:
+				UI::BeginFilamentMonitors();		// extruders without a monitor are null and send nothing
+				break;
+			case rcvOMKeyJobFilament:
+				UI::BeginJobFilament();				// an empty array (no job) sends nothing
+				break;
 			default:
 				break;
 			}
@@ -1405,6 +1496,18 @@ static void ProcessReceivedValue(StringRef id, const char data[], const size_t i
 	// Fans section
 	case rcvFansName:
 		UI::UpdateFanName(indices[0], data);
+		break;
+
+	case rcvFansActualValue:
+		{
+			// The real fan output. A thermostatic fan (M106 ... H T) always has requestedValue 1.0, so the panel shows
+			// this value for it instead.
+			float f;
+			if (GetFloat(data, f) && f >= 0.0f && f <= 1.0f)
+			{
+				UI::UpdateFanActualPercent(indices[0], (int)((f * 100.0f) + 0.5f));
+			}
+		}
 		break;
 
 	case rcvFansRequestedValue:
@@ -1837,6 +1940,10 @@ static void ProcessReceivedValue(StringRef id, const char data[], const size_t i
 		}
 		break;
 
+	case rcvMoveExtrudersFilament:
+		UI::UpdateExtruderFilament(indices[0], data);
+		break;
+
 	case rcvMoveExtrudersPressureAdvance:
 		{
 			float fval;
@@ -1926,6 +2033,20 @@ static void ProcessReceivedValue(StringRef id, const char data[], const size_t i
 		{
 			if (indices[0] == 0 && indices[1] == 0)			// currently we only handle one probe with one value
 			UI::UpdateZProbe(data);
+		}
+		break;
+
+	case rcvSensorsFilamentMonitorStatus:
+		UI::UpdateFilamentMonitorStatus(indices[0], data);
+		break;
+
+	case rcvJobFileFilamentKeyed:
+		{
+			float f;
+			if (GetFloat(data, f))
+			{
+				UI::UpdateJobFilament(indices[0], f);
+			}
 		}
 		break;
 
@@ -3092,10 +3213,7 @@ int main(void)
 				}
 				else
 				{
-					if (PrintInProgress())
-					{
-						PollExtraLiveValues(now);
-					}
+					PollExtraLiveValues(now);			// each extra request decides for itself whether it is needed now
 					currentReqSeq = GetNextSeq(currentReqSeq);
 					if (currentReqSeq != nullptr)
 					{
@@ -3143,3 +3261,10 @@ int main(void)
 extern "C" void __cxa_pure_virtual() { while (1); }
 
 // End
+
+// libgcc's double <-> 64-bit integer helpers carry unwind tables that name these ARM EHABI personality routines, which
+// drags the whole C++ unwinder (and abort/raise) into the firmware. PanelDue is built with -fno-exceptions, so nothing
+// ever unwinds: empty definitions here keep about 3 KB of unused library code out.
+extern "C" void __aeabi_unwind_cpp_pr0() noexcept { }
+extern "C" void __aeabi_unwind_cpp_pr1() noexcept { }
+extern "C" void __aeabi_unwind_cpp_pr2() noexcept { }
