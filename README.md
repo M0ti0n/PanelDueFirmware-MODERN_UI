@@ -43,7 +43,7 @@ Notice: This interface has been coded by Claude and ChatGPT. I design the interf
 
 PanelDue Firmware – Modern UI provides new firmware interface for PanelDue controllers used with Duet 3D electronics. This fork focuses on updating the PanelDue user experience while retaining the functionality and compatibility of the original project.
 
-V2 introduced multi color/ material manegment TAB. ALETR button was removed to accommodate multi material/ color TAB
+v11102026_V2 introduced multi color/ material manegment TAB. ALETR button was removed to accommodate multi material/ color TAB
 
 ## UI
 UI follows modern tab design: on the left side in the top corner we have the emergency STOP button. Underneath are 4 master tabs: CONTROL, STATUS, FILAMENT MANAGEMENT and, at the bottom, SYSTEM. On the top we have a rail with sub tabs that displays the tabs grouped under each master tab. The rest is content area.
