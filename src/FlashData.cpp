@@ -50,7 +50,8 @@ bool FlashData::operator==(const FlashData& other)
 		&& accentColour == other.accentColour
 		&& filamentMode == other.filamentMode
 		&& memcmp(slotColour, other.slotColour, sizeof(slotColour)) == 0
-		&& memcmp(slotMaterial, other.slotMaterial, sizeof(slotMaterial)) == 0;
+		&& memcmp(slotMaterial, other.slotMaterial, sizeof(slotMaterial)) == 0
+		&& fanDisplay == other.fanDisplay;
 }
 
 void FlashData::SetDefaults()
@@ -77,6 +78,7 @@ void FlashData::SetDefaults()
 	filamentMode = 0;									// 0 = not set (values are stored + 1)
 	memset(slotColour, 0, sizeof(slotColour));
 	memset(slotMaterial, 0, sizeof(slotMaterial));
+	fanDisplay = 0;										// not set = %
 	magic = magicVal;
 }
 

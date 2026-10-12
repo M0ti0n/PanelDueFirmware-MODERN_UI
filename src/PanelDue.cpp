@@ -274,6 +274,7 @@ enum ReceivedDataEvent
 	// Keys for fans response
 	rcvFansActualValue,
 	rcvFansName,
+	rcvFansRpm,
 	rcvFansRequestedValue,
 
 	// Keys for heat response
@@ -427,6 +428,7 @@ static FieldTableEntry fieldTable[] =
 	{ rcvFansActualValue,				"fans^:actualValue" },
 	{ rcvFansName,						"fans^:name" },
 	{ rcvFansRequestedValue,			"fans^:requestedValue" },
+	{ rcvFansRpm,						"fans^:rpm" },
 
 	// M409 K"heat" response
 	{ rcvHeatBedHeaters,				"heat:bedHeaters^" },				// RRF 3.6 and earlier
@@ -497,7 +499,11 @@ static FieldTableEntry fieldTable[] =
 	{ rcvMoveExtrudersPressureAdvance,	"move.extruders^:pressureAdvance" },
 	{ rcvMoveExtrudersFilament,			"move.extruders^:filament" },
 	{ rcvJobLayer,						"job.layer" },
-	{ rcvMoveCurrentExtrusionRateKeyed,	"move.currentMove.extrusionRate" },
+	// The extra live request below asks for the whole of move.currentMove. RRF 3.7 no longer sends requestedSpeed and topSpeed
+	// in the regular PanelDue live request (flag 'p'), so this request supplies them too.
+	{ rcvMoveCurrentExtrusionRateKeyed,	"move.currentMove:extrusionRate" },
+	{ rcvMoveCurrentRequestedSpeed,		"move.currentMove:requestedSpeed" },
+	{ rcvMoveCurrentTopSpeed,			"move.currentMove:topSpeed" },
 	{ rcvMoveSpeedFactor, 				"move:speedFactor" },
 	{ rcvMoveWorkplaceNumber, 			"move:workplaceNumber" },
 
@@ -636,13 +642,13 @@ static struct Seq {
 	{ .event = rcvOMKeyBoards, .seqid = rcvSeqsBoards, .lastSeq = 0, .state = SeqStateInit, .key = "boards", .flags = "vp" },
 #endif
 #if FETCH_MOVE
-	{ .event = rcvOMKeyMove, .seqid = rcvSeqsMove, .lastSeq = 0, .state = SeqStateInit, .key = "move", .flags = "vp" },
+	{ .event = rcvOMKeyMove, .seqid = rcvSeqsMove, .lastSeq = 0, .state = SeqStateInit, .key = "move", .flags = "vpo" },		// o: RRF 3.7 marks workplaceNumber obsolete; older RRF ignores the flag
 	// The extruder fields the modern UI shows (flow factor, pressure advance, filament diameter) are asked for separately
 	// without the 'p' flag, which may make RRF leave them out. Shares the move sequence number.
-	{ .event = rcvOMKeyMoveExtruders, .seqid = rcvSeqsMove, .lastSeq = 0, .state = SeqStateInit, .key = "move.extruders", .flags = "vn" },
+	{ .event = rcvOMKeyMoveExtruders, .seqid = rcvSeqsMove, .lastSeq = 0, .state = SeqStateInit, .key = "move.extruders", .flags = "vno" },	// o: RRF 3.7 marks pressureAdvance obsolete
 	// Single live values that the PRINTING page shows and that the 'p' flag in the regular live request may drop.
 	// They have no sequence number of their own; PollExtraLiveValues() sets them to SeqStateUpdate every few seconds while printing.
-	{ .event = rcvOMKeyLiveExtrusionRate, .seqid = rcvSeqsLiveExtrusionRate, .lastSeq = 0, .state = SeqStateInit, .key = "move.currentMove.extrusionRate", .flags = "" },
+	{ .event = rcvOMKeyLiveExtrusionRate, .seqid = rcvSeqsLiveExtrusionRate, .lastSeq = 0, .state = SeqStateInit, .key = "move.currentMove", .flags = "" },
 #endif
 #if FETCH_HEAT
 	{ .event = rcvOMKeyHeat, .seqid = rcvSeqsHeat, .lastSeq = 0, .state = SeqStateInit, .key = "heat", .flags = "vp" },
@@ -1506,6 +1512,16 @@ static void ProcessReceivedValue(StringRef id, const char data[], const size_t i
 			if (GetFloat(data, f) && f >= 0.0f && f <= 1.0f)
 			{
 				UI::UpdateFanActualPercent(indices[0], (int)((f * 100.0f) + 0.5f));
+			}
+		}
+		break;
+
+	case rcvFansRpm:
+		{
+			int32_t rpm;
+			if (GetInteger(data, rpm))
+			{
+				UI::UpdateFanRpm(indices[0], rpm);			// -1 = the fan has no tacho
 			}
 		}
 		break;

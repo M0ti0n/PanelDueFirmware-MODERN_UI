@@ -606,6 +606,22 @@ static int GeneralFanPercent(int fan)
 {
 	return (tuneFanThermostatic[fan] && tuneFanActual[fan] >= 0) ? tuneFanActual[fan] : tuneFanPercent[fan];
 }
+
+// Fan RPM from RRF (fans[].rpm), -1 = the fan has no tacho
+static int16_t tuneFanRpm[TuneMaxFans] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+
+// Value text of a fan tile on the PRINTING page: RPM if chosen (tap on the fan tiles) and the fan has a tacho, otherwise %
+template<size_t N> static void FanTileText(String<N>& value, int fan, int percent)
+{
+	if (nvData.GetFanShowRpm() && tuneFanRpm[fan] >= 0)
+	{
+		value.printf("%d RPM", tuneFanRpm[fan]);
+	}
+	else
+	{
+		value.printf("%d%%", percent);
+	}
+}
 static int tuneSpeedPercent = 100;
 
 static String<32> tunePopupTitleText;
@@ -4625,16 +4641,16 @@ static void RefreshJobStatusTile(unsigned int slot)
 		index = GetJobStatusToolFan();
 		if (index >= 0 && index < static_cast<int>(TuneMaxFans) && tuneFanValid[index])
 		{
-			value.printf("%d%%", tuneFanPercent[index]);
+			FanTileText(value, index, tuneFanPercent[index]);
 		}
 		break;
 	case JobStatusTileType::FanAux:
 		index = FindNamedFan("FAN_AUX");
-		if (index >= 0) value.printf("%d%%", GeneralFanPercent(index));
+		if (index >= 0) FanTileText(value, index, GeneralFanPercent(index));
 		break;
 	case JobStatusTileType::FanCha:
 		index = FindNamedFan("FAN_CHA");
-		if (index >= 0) value.printf("%d%%", GeneralFanPercent(index));
+		if (index >= 0) FanTileText(value, index, GeneralFanPercent(index));
 		break;
 	case JobStatusTileType::SpeedReq:
 		value.printf("%.0f mm/s", (double)jobStatusRequestedSpeed);
@@ -4869,6 +4885,9 @@ static void CreateStatusJobStatusTabFields(const ColourScheme& colours)
 		jobStatusCards[i] = new ModernCard(y, x, w, 67, tile, tile);
 		mgr.AddField(jobStatusCards[i]);
 	}
+
+	// The fan tiles (middle row) switch between % and RPM when tapped. The touch area draws nothing.
+	mgr.AddField(new ModernTouchArea(151 + 77, JobX(358), JobX(358 + 2 * 146) + JobW(130) - JobX(358), 67, evJobStatusFanDisplayToggle, 0));
 
 	// Bottom information fields.
 	DisplayField::SetDefaultColours(text, tile);
@@ -8553,6 +8572,7 @@ namespace UI
 			tuneFanValid[fan] = false;
 			tuneFanThermostatic[fan] = false;
 			tuneFanNames[fan].Clear();
+			tuneFanRpm[fan] = -1;
 			tuneFanActual[fan] = -1;
 		}
 
@@ -8562,6 +8582,29 @@ namespace UI
 			RefreshJobStatusTilesByType(JobStatusTileType::FanAux);
 			RefreshJobStatusTilesByType(JobStatusTileType::FanCha);
 		}
+#endif
+	}
+
+	// Fan RPM (fans[].rpm, -1 without a tacho). Rounded to 10 RPM so that the tiles do not repaint for every small change.
+	void UpdateFanRpm(size_t fanIndex, int32_t rpm)
+	{
+#if DISPLAY_X == 800
+		if (fanIndex < TuneMaxFans)
+		{
+			const int16_t value = (rpm < 0) ? -1 : (int16_t)min<int32_t>(((rpm + 5) / 10) * 10, 32000);
+			if (tuneFanRpm[fanIndex] != value)
+			{
+				tuneFanRpm[fanIndex] = value;
+				if (nvData.GetFanShowRpm() && currentUiPage == UiPage::StatusJobStatus)
+				{
+					RefreshJobStatusTilesByType(JobStatusTileType::FanPart);
+					RefreshJobStatusTilesByType(JobStatusTileType::FanAux);
+					RefreshJobStatusTilesByType(JobStatusTileType::FanCha);
+				}
+			}
+		}
+#else
+		UNUSED(fanIndex); UNUSED(rpm);
 #endif
 	}
 
@@ -10419,6 +10462,16 @@ namespace UI
 			case evFilamentUnload:
 				currentButton.Clear();
 				FmUnload();
+				break;
+
+			case evJobStatusFanDisplayToggle:
+				nvData.SetFanShowRpm(!nvData.GetFanShowRpm());
+				SaveSettings();
+				RefreshJobStatusTilesByType(JobStatusTileType::FanPart);
+				RefreshJobStatusTilesByType(JobStatusTileType::FanAux);
+				RefreshJobStatusTilesByType(JobStatusTileType::FanCha);
+				mgr.Refresh(false);
+				currentButton.Clear();
 				break;
 
 			case evSettingsOrientationOpen:

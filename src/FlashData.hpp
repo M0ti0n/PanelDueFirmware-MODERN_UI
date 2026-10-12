@@ -60,6 +60,7 @@ struct FlashData
 	uint8_t filamentMode;								// 1 = filament macros (RRF), 2 = panel only, else not chosen yet
 	uint8_t slotColour[16];								// per tool/slot: colour palette index + 1 (1..64), else none
 	uint8_t slotMaterial[16];							// per tool/slot: built-in material index + 1 (panel mode), else none
+	uint8_t fanDisplay;									// PRINTING fan tiles: 1 = %, 2 = RPM, else not set (= %)
 	alignas(4) char dummy;								// must be at a multiple of 4 bytes from the start because flash is read/written in whole dwords
 
 	FlashData() : magic(muggleVal) { SetDefaults(); }
@@ -108,6 +109,8 @@ struct FlashData
 	static uint8_t Encode(uint8_t v) { return (v == 0xFF) ? 0 : (uint8_t)(v + 1); }
 	static uint8_t Decode(uint8_t raw, uint8_t limit) { return (raw != 0 && raw <= limit) ? (uint8_t)(raw - 1) : 0xFF; }
 	uint8_t GetFilamentMode() { return Decode(nvData.filamentMode, 2); }
+	bool GetFanShowRpm() { return Decode(nvData.fanDisplay, 2) == 1; }
+	void SetFanShowRpm(bool rpm) { nvData.fanDisplay = Encode(rpm ? 1 : 0); }
 	void SetFilamentMode(uint8_t mode) { nvData.filamentMode = Encode(mode); }
 	uint8_t GetSlotColour(size_t slot) { return (slot < FilamentSlots) ? Decode(nvData.slotColour[slot], 64) : 0xFF; }
 	void SetSlotColour(size_t slot, uint8_t colour) { if (slot < FilamentSlots) { nvData.slotColour[slot] = Encode(colour); } }
