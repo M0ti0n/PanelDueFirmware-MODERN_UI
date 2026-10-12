@@ -213,6 +213,9 @@ enum Event : uint8_t
 	evSettingsOrientationOpen,
 	evSettingsFilamentModeToggle,
 
+	// PRINTING page
+	evJobStatusFanDisplayToggle,	// tap on the fan tiles: show fan speed in % or RPM
+
 };
 
 #endif /* SRC_UI_EVENTS_HPP_ */
