@@ -87,6 +87,7 @@ MACROS displays up to six RRF macro entries per page, with folder navigation and
 
 PRINTING shows the active print at a glance with job name, progress, slicer thumbnail and a fixed 3×3 read-only telemetry grid. The page also exposes layer/time summary plus the pause/resume and abort actions when a print is active. Two non-tool fans are identified by their RRF fan names, not by whichever unused fan numbers happen to come first. They need to be named like this so PanelDue assigns the correct tile on the printing screen to them. For the thumbnail to show up you need to add "220x220/QOI" in the slicer.
 
+TAPING MIDDLE ROW OF TILES WILL SWITCH TILES BETWEEN SHOWING  FAN SPEED IN % AND FAN RPM
 FAN_AUX → auxiliary fan
 
 FAN_CHA → chamber/filter fan
@@ -378,11 +379,11 @@ v3-7.0c
 
 | PanelDue model | Download |
 | --- | --- |
-| **v3 5.0"** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3-5.0_v11102026_V2.bin) |
-| **v3 7.0"** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3-7.0_v11102026_V2.bin) |
-| **v3 7.0c** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3-7.0-c_v11102026_V2.bin) |
-| **5.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_5.0-i_v11102026_V2.bin) |
-| **7.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_7.0-i_v11102026_V2.bin) |
+| **v3 5.0"** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3-5.0_v12102026_V2-1.bin) |
+| **v3 7.0"** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3-7.0_v12102026_V2-1.bin) |
+| **v3 7.0c** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_v3-7.0-c_v12102026_V2-1.bin) |
+| **5.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_5.0-i_v12102026_V2-1.bin) |
+| **7.0i** | [Download latest](last%20versions%20compiled/paneldue_MODERN_UI_7.0-i_v12102026_V2-1.bin) |
 
 ### Endless spool macro template
 
