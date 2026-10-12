@@ -87,7 +87,7 @@ MACROS displays up to six RRF macro entries per page, with folder navigation and
 
 PRINTING shows the active print at a glance with job name, progress, slicer thumbnail and a fixed 3×3 read-only telemetry grid. The page also exposes layer/time summary plus the pause/resume and abort actions when a print is active. Two non-tool fans are identified by their RRF fan names, not by whichever unused fan numbers happen to come first. They need to be named like this so PanelDue assigns the correct tile on the printing screen to them. For the thumbnail to show up you need to add "220x220/QOI" in the slicer.
 
-TAPING MIDDLE ROW OF TILES WILL SWITCH TILES BETWEEN SHOWING  FAN SPEED IN % AND FAN RPM
+TAPING MIDDLE ROW OF TILES WILL SWITCH TILES BETWEEN SHOWING  FAN SPEED IN % AND FAN RPM,(only if you have 3 wire fans)
 
 
 FAN_AUX → auxiliary fan
